@@ -622,6 +622,7 @@ name = "cl-p2p-setup"
 version = "0.1.0"
 dependencies = [
  "discv5",
+ "futures",
  "libp2p",
  "tokio",
 ]

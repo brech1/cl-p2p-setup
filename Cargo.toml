@@ -9,3 +9,4 @@ edition = "2021"
 tokio = { version = "1.23.0", features = ["full", "rt-multi-thread", "time","macros"] }
 libp2p =  { version = "0.50.0", features = ["full", "tcp", "dns", "async-std", "websocket", "tokio"] }
 discv5 = { version = "0.1.0", features = ["libp2p"] }
+futures =  { version = "0.3.25" }

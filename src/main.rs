@@ -5,12 +5,13 @@ use libp2p::gossipsub::RawGossipsubMessage;
 use libp2p::gossipsub::{
     FastMessageId, Gossipsub, IdentTopic as Topic, MessageAuthenticity, ValidationMode,
 };
-use libp2p::multiaddr::Protocol;
-use libp2p::swarm::{ConnectionLimits, SwarmBuilder};
-use libp2p::Multiaddr;
+use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
+use libp2p::swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent};
 use libp2p::{gossipsub, identity, swarm::NetworkBehaviour, PeerId};
 use std::time::Duration;
+mod config;
 mod discovery;
+mod utils;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,20 +24,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = libp2p::tokio_development_transport(local_key.clone())?;
 
     let discovery = Discovery::new(&local_key).await;
-
-    let mut nodes_multiaddr: Vec<Multiaddr> = Vec::new();
-
-    for node in discovery.found_nodes.clone() {
-        if let Some(ip) = node.ip4() {
-            if let Some(tcp) = node.tcp4() {
-                if tcp == 9000 {
-                    let mut multiaddr: Multiaddr = ip.into();
-                    multiaddr.push(Protocol::Tcp(tcp));
-                    nodes_multiaddr.push(multiaddr);
-                }
-            }
-        }
-    }
 
     let fast_gossip_message_id =
         |message: &RawGossipsubMessage| FastMessageId::from(&Sha256::digest(&message.data)[..8]);
@@ -88,16 +75,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
-    for node in nodes_multiaddr.clone() {
-        swarm.dial(node)?;
-    }
-
-    // swarm.dial(nodes_multiaddr[1].clone())?;
-
     // Run
     loop {
         tokio::select! {
-            event = swarm.next() => match event {
+            event = swarm.select_next_some() => match event {
+                SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
+                    BehaviourEvent::Gossipsub(ev) => println!("Gossipsub: {ev:?}"),
+                    BehaviourEvent::Discovery(discovered) => {
+                        for (peer_id, _multiaddr) in discovered.peers {
+                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+
+                            let dial_opts = DialOpts::peer_id(peer_id)
+                            .condition(PeerCondition::Disconnected)
+                            .build();
+
+                            swarm.dial(dial_opts).unwrap();
+                        }
+                    },
+                },
                 _ => println!("Swarm: {event:?}"),
             }
         }
