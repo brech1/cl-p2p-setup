@@ -1,7 +1,8 @@
 use crate::config::BOOTNODE;
-use crate::utils::{key_from_libp2p, EnrAsPeerId};
+use crate::enr::{build_enr, EnrAsPeerId, ETH2_ENR_KEY};
+use crate::utils::key_from_libp2p;
 use discv5::enr::NodeId;
-use discv5::{enr, enr::CombinedKey, Discv5, Discv5ConfigBuilder, Discv5Event, Enr};
+use discv5::{enr::CombinedKey, Discv5, Discv5ConfigBuilder, Discv5Event, Enr};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use libp2p::futures::FutureExt;
@@ -16,11 +17,12 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 pub struct Discovery {
     discv5: Discv5,
+    _enr: Enr,
     event_stream: EventStream,
     multiaddr_map: HashMap<PeerId, Multiaddr>,
     peers_future: FuturesUnordered<std::pin::Pin<Box<dyn Future<Output = DiscResult> + Send>>>,
@@ -41,19 +43,26 @@ impl Discovery {
 
         // Generate ENR
         let enr_key: CombinedKey = key_from_libp2p(&local_key).unwrap();
-        let mut enr_builder = enr::EnrBuilder::new("v4");
 
-        enr_builder.ip("0.0.0.0".parse().unwrap());
-        enr_builder.udp4(9000);
-        enr_builder.tcp4(9000);
-
-        let local_enr = enr_builder.build(&enr_key).unwrap();
+        let local_enr = build_enr(&enr_key);
 
         // Setup default config
-        let config = Discv5ConfigBuilder::new().build();
+        let config = Discv5ConfigBuilder::new()
+            .enable_packet_filter()
+            .request_timeout(Duration::from_secs(1))
+            .query_peer_timeout(Duration::from_secs(2))
+            .query_timeout(Duration::from_secs(30))
+            .request_retries(1)
+            .enr_peer_update_min(10)
+            .query_parallelism(5)
+            .disable_report_discovered_peers()
+            .ip_limit()
+            .incoming_bucket_limit(8)
+            .ping_interval(Duration::from_secs(300))
+            .build();
 
         // Create discv5 instance
-        let mut discv5 = Discv5::new(local_enr, enr_key, config).unwrap();
+        let mut discv5 = Discv5::new(local_enr.clone(), enr_key, config).unwrap();
 
         // Add bootnode
         let ef_bootnode_enr = Enr::from_str(BOOTNODE).unwrap();
@@ -67,11 +76,16 @@ impl Discovery {
 
         return Self {
             discv5,
+            _enr: local_enr,
             event_stream,
             multiaddr_map: HashMap::new(),
             peers_future: FuturesUnordered::new(),
             started: false,
         };
+    }
+
+    fn _get_eth2_field(&self) -> Vec<u8> {
+        self._enr.get(ETH2_ENR_KEY).unwrap_or(&[0]).to_vec()
     }
 
     fn find_peers(&mut self) {
@@ -80,7 +94,7 @@ impl Discovery {
 
         let target = NodeId::random();
 
-        let peers_enr = self.discv5.find_node_predicate(target, predicate, 5);
+        let peers_enr = self.discv5.find_node_predicate(target, predicate, 16);
 
         self.peers_future.push(Box::pin(peers_enr));
     }
@@ -154,6 +168,8 @@ impl NetworkBehaviour for Discovery {
         if !self.started {
             self.started = true;
             self.find_peers();
+
+            return Poll::Pending;
         }
 
         if let Some(dp) = self.get_peers(cx) {

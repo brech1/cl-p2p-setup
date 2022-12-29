@@ -1,16 +1,12 @@
 use crate::discovery::Discovery;
-use discv5::enr::k256::sha2::{Digest, Sha256};
 use libp2p::futures::StreamExt;
-use libp2p::gossipsub::RawGossipsubMessage;
-use libp2p::gossipsub::{
-    FastMessageId, Gossipsub, IdentTopic as Topic, MessageAuthenticity, ValidationMode,
-};
-use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
+use libp2p::gossipsub::{Gossipsub, IdentTopic as Topic, MessageAuthenticity, ValidationMode};
 use libp2p::swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent};
 use libp2p::{gossipsub, identity, swarm::NetworkBehaviour, PeerId};
 use std::time::Duration;
 mod config;
 mod discovery;
+mod enr;
 mod utils;
 
 #[tokio::main]
@@ -18,6 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a random PeerId
     let local_key = identity::Keypair::generate_secp256k1();
     let local_peer_id = PeerId::from(local_key.public());
+
     println!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the Mplex protocol.
@@ -25,16 +22,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let discovery = Discovery::new(&local_key).await;
 
-    let fast_gossip_message_id =
-        |message: &RawGossipsubMessage| FastMessageId::from(&Sha256::digest(&message.data)[..8]);
-
     // Set a custom gossipsub configuration
     let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
         .max_transmit_size(10 * 1_048_576)
         .fanout_ttl(Duration::from_secs(60))
         .heartbeat_interval(Duration::from_millis(10_000))
         .validation_mode(ValidationMode::Anonymous)
-        .fast_message_id_fn(fast_gossip_message_id)
         .fanout_ttl(Duration::from_secs(60))
         .history_length(12)
         .max_messages_per_rpc(Some(500))
@@ -51,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
 
-    // We create a custom network behaviour that combines Gossipsub and Mdns.
+    // We create a custom network behaviour that combines Gossipsub and Discv5.
     #[derive(NetworkBehaviour)]
     struct Behaviour {
         gossipsub: Gossipsub,
@@ -84,12 +77,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BehaviourEvent::Discovery(discovered) => {
                         for (peer_id, _multiaddr) in discovered.peers {
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-
-                            let dial_opts = DialOpts::peer_id(peer_id)
-                            .condition(PeerCondition::Disconnected)
-                            .build();
-
-                            swarm.dial(dial_opts).unwrap();
                         }
                     },
                 },
