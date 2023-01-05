@@ -1,8 +1,10 @@
+use crate::chain::ForkId;
 use discv5::{
     enr::{self, CombinedKey, CombinedPublicKey},
     Enr,
 };
 use libp2p::PeerId;
+use ssz::{Decode, Encode};
 
 // Implement consensus specs enr structure
 // See: https://github.com/ethereum/consensus-specs/blob/master/specs/phase0/p2p-interface.md#enr-structure
@@ -19,9 +21,7 @@ pub fn build_enr(combined_key: &CombinedKey) -> Enr {
 
     enr_builder.tcp4(9000);
 
-    // Build and add eth2 field
-
-    // enr_builder.add_value(ETH2_ENR_KEY, eth2_field);
+    enr_builder.add_value(ETH2_ENR_KEY, &ForkId::new().as_ssz_bytes());
 
     enr_builder.build(combined_key).unwrap()
 }
@@ -53,5 +53,17 @@ impl EnrAsPeerId for Enr {
                 PeerId::from_public_key(&libp2p_pk)
             }
         }
+    }
+}
+
+pub trait EnrForkId {
+    fn fork_id(&self) -> Result<ForkId, &'static str>;
+}
+
+impl EnrForkId for Enr {
+    fn fork_id(&self) -> Result<ForkId, &'static str> {
+        let eth2_bytes = self.get(ETH2_ENR_KEY).ok_or("ENR has no eth2 field")?;
+
+        ForkId::from_ssz_bytes(eth2_bytes).map_err(|_| "Could not decode EnrForkId")
     }
 }

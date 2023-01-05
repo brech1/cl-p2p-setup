@@ -1,6 +1,5 @@
 use crate::config::BOOTNODE;
-use crate::enr::{build_enr, EnrAsPeerId, ETH2_ENR_KEY};
-use crate::utils::key_from_libp2p;
+use crate::enr::{build_enr, EnrAsPeerId, EnrForkId};
 use discv5::enr::NodeId;
 use discv5::{enr::CombinedKey, Discv5, Discv5ConfigBuilder, Discv5Event, Enr};
 use futures::stream::FuturesUnordered;
@@ -84,13 +83,12 @@ impl Discovery {
         };
     }
 
-    fn _get_eth2_field(&self) -> Vec<u8> {
-        self._enr.get(ETH2_ENR_KEY).unwrap_or(&[0]).to_vec()
-    }
-
     fn find_peers(&mut self) {
-        let predicate: Box<dyn Fn(&Enr) -> bool + Send> =
-            Box::new(move |enr: &Enr| enr.tcp4().is_some() && enr.udp4().is_some());
+        let fork_digest = self._enr.fork_id().unwrap().fork_digest;
+
+        let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
+            enr.fork_id().map(|e| e.fork_digest) == Ok(fork_digest) && enr.tcp4() == Some(9000)
+        });
 
         let target = NodeId::random();
 
@@ -206,5 +204,17 @@ impl NetworkBehaviour for Discovery {
             }
         }
         Poll::Pending
+    }
+}
+
+// Get CombinedKey from Secp256k1 libp2p Keypair
+pub fn key_from_libp2p(key: &libp2p::core::identity::Keypair) -> Result<CombinedKey, &'static str> {
+    match key {
+        Keypair::Secp256k1(key) => {
+            let secret = discv5::enr::k256::ecdsa::SigningKey::from_bytes(&key.secret().to_bytes())
+                .expect("libp2p key must be valid");
+            Ok(CombinedKey::Secp256k1(secret))
+        }
+        _ => Err("pair not supported"),
     }
 }

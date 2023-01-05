@@ -4,10 +4,10 @@ use libp2p::gossipsub::{Gossipsub, IdentTopic as Topic, MessageAuthenticity, Val
 use libp2p::swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent};
 use libp2p::{gossipsub, identity, swarm::NetworkBehaviour, PeerId};
 use std::time::Duration;
+mod chain;
 mod config;
 mod discovery;
 mod enr;
-mod utils;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

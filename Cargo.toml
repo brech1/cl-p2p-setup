@@ -10,3 +10,12 @@ tokio = { version = "1.23.0", features = ["full", "rt-multi-thread", "time","mac
 libp2p =  { version = "0.50.0", features = ["full", "tcp", "dns", "async-std", "websocket", "tokio"] }
 discv5 = { version = "0.1.0", features = ["libp2p"] }
 futures =  { version = "0.3.25" }
+ethereum-types = "0.14.1"
+serde_derive = "1.0.152"
+eth2_ssz = "0.4.0"
+eth2_ssz_derive = "0.3.0"
+eth2_ssz_types = "0.2.1"
+tree_hash = "0.4.0"
+tree_hash_derive = "0.4.0"
+serde = "1.0.152"
+primitive-types = "0.12.1"
