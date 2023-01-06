@@ -1,8 +1,8 @@
 use crate::discovery::Discovery;
 use libp2p::futures::StreamExt;
-use libp2p::gossipsub::{Gossipsub, IdentTopic as Topic, MessageAuthenticity, ValidationMode};
-use libp2p::swarm::{ConnectionLimits, SwarmBuilder, SwarmEvent};
-use libp2p::{gossipsub, identity, swarm::NetworkBehaviour, PeerId};
+use libp2p::gossipsub::{Gossipsub, IdentTopic, MessageAuthenticity, ValidationMode};
+use libp2p::swarm::{ConnectionLimits, NetworkBehaviour, SwarmBuilder, SwarmEvent};
+use libp2p::{core, dns, gossipsub, identity, mplex, noise, tcp, yamux, PeerId, Transport};
 use std::time::Duration;
 mod chain;
 mod config;
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the Mplex protocol.
-    let transport = libp2p::tokio_development_transport(local_key.clone())?;
+    let transport = build_transport(&local_key)?;
 
     let discovery = Discovery::new(&local_key).await;
 
@@ -26,11 +26,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gossipsub_config = gossipsub::GossipsubConfigBuilder::default()
         .max_transmit_size(10 * 1_048_576)
         .fanout_ttl(Duration::from_secs(60))
-        .heartbeat_interval(Duration::from_millis(10_000))
+        .heartbeat_interval(Duration::from_millis(1_000))
         .validation_mode(ValidationMode::Anonymous)
         .fanout_ttl(Duration::from_secs(60))
         .history_length(12)
         .max_messages_per_rpc(Some(500))
+        .allow_self_origin(true)
         .build()
         .expect("Valid config");
 
@@ -39,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Correct configuration");
 
     // Create a Gossipsub topic
-    let topic = Topic::new("/eth2/4a26c58b/beacon_block/ssz_snappy");
+    let topic = IdentTopic::new("/eth2/4a26c58b/beacon_block/ssz_snappy");
 
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
@@ -84,4 +85,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+}
+
+pub fn build_transport(
+    keypair: &identity::Keypair,
+) -> std::io::Result<core::transport::Boxed<(PeerId, core::muxing::StreamMuxerBox)>> {
+    let transport =
+        dns::TokioDnsConfig::system(tcp::tokio::Transport::new(tcp::Config::new().nodelay(true)))?;
+
+    let mut mplex_config = mplex::MplexConfig::new();
+    mplex_config.set_max_buffer_size(256);
+    mplex_config.set_max_buffer_behaviour(mplex::MaxBufferBehaviour::Block);
+
+    let mut yamux_config = yamux::YamuxConfig::default();
+    yamux_config.set_window_update_mode(yamux::WindowUpdateMode::on_read());
+
+    Ok(transport
+        .upgrade(core::upgrade::Version::V1)
+        .authenticate(noise::NoiseAuthenticated::xx(keypair).unwrap())
+        .multiplex(core::upgrade::SelectUpgrade::new(
+            yamux_config,
+            mplex_config,
+        ))
+        .timeout(std::time::Duration::from_secs(20))
+        .boxed())
 }
