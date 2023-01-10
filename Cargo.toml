@@ -7,9 +7,9 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.23.0", features = ["full", "rt-multi-thread", "time","macros"] }
-libp2p =  { version = "0.50.0", features = ["full", "tcp", "dns", "async-std", "websocket", "tokio"] }
+libp2p =  { version = "0.50.0", features = ["full", "tcp", "dns", "websocket", "tokio", "identify", "mplex", "yamux", "noise", "gossipsub"] }
 discv5 = { version = "0.1.0", features = ["libp2p"] }
-futures =  { version = "0.3.25" }
+futures =  "0.3.25"
 ethereum-types = "0.14.1"
 serde_derive = "1.0.152"
 eth2_ssz = "0.4.0"
@@ -19,3 +19,5 @@ tree_hash = "0.4.0"
 tree_hash_derive = "0.4.0"
 serde = "1.0.152"
 primitive-types = "0.12.1"
+snap = "1.1.0"
+sha2 = "0.10.6"

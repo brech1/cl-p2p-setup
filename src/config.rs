@@ -1,5 +1,11 @@
+use std::time::Duration;
+
 // One of the Ethereum Foundation Geth Bootnodes
 pub const BOOTNODE: &str = "enr:-Ku4QG-2_Md3sZIAUebGYT6g0SMskIml77l6yR-M_JXc-UdNHCmHQeOiMLbylPejyJsdAPsTHJyjJB2sYGDLe0dn8uYBh2F0dG5ldHOIAAAAAAAAAACEZXRoMpC1MD8qAAAAAP__________gmlkgnY0gmlwhBLY-NyJc2VjcDI1NmsxoQORcM6e19T1T9gi7jxEZjk_sjVLGFscUNqAY9obgZaxbIN1ZHCCIyg";
+
+pub const GOSSIP_MAX_SIZE_BELLATRIX: usize = 10 * 1_048_576; // 10 * 2**20
+
+pub const DUPLICATE_CACHE_TIME: Duration = Duration::from_secs(33 * 12 + 1);
 
 // https://eth2book.info/bellatrix/part3/containers/state/#table_0
 

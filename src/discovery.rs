@@ -87,7 +87,7 @@ impl Discovery {
         let fork_digest = self._enr.fork_id().unwrap().fork_digest;
 
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
-            enr.fork_id().map(|e| e.fork_digest) == Ok(fork_digest) && enr.tcp4() == Some(9000)
+            enr.fork_id().map(|e| e.fork_digest) == Ok(fork_digest) && enr.tcp4().is_some()
         });
 
         let target = NodeId::random();
@@ -195,8 +195,8 @@ impl NetworkBehaviour for Discovery {
             EventStream::Present(ref mut stream) => {
                 while let Poll::Ready(Some(event)) = stream.poll_recv(cx) {
                     match event {
-                        Discv5Event::SessionEstablished(enr, _) => {
-                            println!("Session Established: {:?}", enr);
+                        Discv5Event::SessionEstablished(_enr, _) => {
+                            // println!("Session Established: {:?}", enr);
                         }
                         _ => (),
                     }
