@@ -10,9 +10,6 @@ It is based on the [lighthouse](https://github.com/sigp/lighthouse) client beaco
 - [discv5](https://github.com/sigp/discv5)
 - [tokio](https://github.com/tokio-rs/tokio)
 
-Established connections are dropped by peers due to not having the correct [eth2](https://github.com/ethereum/consensus-specs/blob/v1.2.0/specs/phase0/p2p-interface.md#eth2-field) field in the ENR. Working on it!
+## Issues
 
-There's also some work to be made for message processing using:
-
-- [SSZ](https://ethereum.org/en/developers/docs/data-structures-and-encoding/ssz/)
-- [Snappy](https://en.wikipedia.org/wiki/Snappy_(compression))
+Established connections are being dropped due to the [Req/Res domain](https://github.com/ethereum/consensus-specs/blob/dev/specs/phase0/p2p-interface.md#the-reqresp-domain) not being implemented. This leads to a bad peer score and eventual disconnection. Working on implementing it.
