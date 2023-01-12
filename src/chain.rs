@@ -24,31 +24,6 @@ impl ForkId {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
-pub struct SigningData {
-    pub object_root: Hash256,
-    pub domain: Hash256,
-}
-
-pub trait SignedRoot: TreeHash {
-    fn signing_root(&self, domain: Hash256) -> Hash256 {
-        SigningData {
-            object_root: self.tree_hash_root(),
-            domain,
-        }
-        .tree_hash_root()
-        .into()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Encode, Decode, TreeHash)]
-pub struct ForkData {
-    pub current_version: [u8; 4],
-    pub genesis_validators_root: Hash256,
-}
-
-impl SignedRoot for ForkData {}
-
 // https://eth2book.info/bellatrix/part3/helper/misc/#compute_fork_digest
 pub fn compute_fork_digest(current_version: [u8; 4], genesis_validators_root: Hash256) -> [u8; 4] {
     let mut result = [0; 4];
@@ -72,3 +47,28 @@ pub fn compute_fork_data_root(
     }
     .tree_hash_root()
 }
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, Encode, Decode, TreeHash)]
+pub struct ForkData {
+    pub current_version: [u8; 4],
+    pub genesis_validators_root: Hash256,
+}
+
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+pub struct SigningData {
+    pub object_root: Hash256,
+    pub domain: Hash256,
+}
+
+pub trait SignedRoot: TreeHash {
+    fn signing_root(&self, domain: Hash256) -> Hash256 {
+        SigningData {
+            object_root: self.tree_hash_root(),
+            domain,
+        }
+        .tree_hash_root()
+        .into()
+    }
+}
+
+impl SignedRoot for ForkData {}
