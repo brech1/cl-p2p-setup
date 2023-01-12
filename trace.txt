@@ -1,0 +1,14 @@
+Jan 11 20:31:30.581 DEBG Connection established                  connection: Listener, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, service: libp2p
+Jan 11 20:31:30.582 DEBG RPC Error                               direction: Outgoing, score: 0, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, client: Unknown, err: Peer does not support the protocol, protocol: metadata, service: libp2p
+Jan 11 20:31:30.583 DEBG Peer score adjusted                     score: -10.00, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, msg: handle_rpc_error, service: libp2p
+
+
+/////
+
+Jan 11 20:31:50.584 TRCE Sending Ping                            peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, service: libp2p
+Jan 11 20:31:50.588 DEBG RPC Error                               direction: Outgoing, score: -9.999968760147635, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, client: Unknown, err: Peer does not support the protocol, protocol: ping, service: libp2p
+Jan 11 20:31:50.588 DEBG Peer has been banned                    score: -100.00, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, service: libp2p
+Jan 11 20:31:50.588 DEBG Peer Manager disconnecting peer         reason: Bad Score, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, service: libp2p
+Jan 11 20:31:50.588 TRCE Async task completed                    task: libp2p
+Jan 11 20:31:50.588 DEBG Ignoring rpc message of disconnecting peer, peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, msg_kind: outbound_err, protocol: goodbye, service: libp2p
+Jan 11 20:31:50.589 DEBG Peer disconnected                       peer_id: 16Uiu2HAkySRycoEf4hjCHyHqEU3J54RswvSFkmmAx4mtsdHzmPhH, service: libp2p

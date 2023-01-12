@@ -6,13 +6,16 @@ use libp2p::gossipsub::{
     DataTransform, Gossipsub, GossipsubMessage, IdentTopic, MessageAuthenticity, MessageId,
     RawGossipsubMessage, TopicHash, ValidationMode,
 };
+use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{ConnectionLimits, NetworkBehaviour, SwarmBuilder, SwarmEvent};
 use libp2p::{
-    core, dns, gossipsub, identity, mplex, noise, tcp, websocket, yamux, PeerId, Transport,
+    core, dns, gossipsub, identity, mplex, noise, tcp, websocket, yamux, Multiaddr, PeerId,
+    Transport,
 };
 use sha2::{Digest, Sha256};
 use snap::raw::{decompress_len, Decoder, Encoder};
 use std::io::{Error, ErrorKind};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 mod chain;
 mod config;
@@ -81,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Create a Gossipsub topic
-    let topic = IdentTopic::new("/eth2/4a26c58b/beacon_block/ssz_snappy");
+    let topic = IdentTopic::new("/eth2/224daa27/beacon_block/ssz_snappy");
 
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
@@ -114,6 +117,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
+
+    let mut multiaddr = Multiaddr::from(Ipv4Addr::new(127, 0, 0, 1));
+    multiaddr.push(Protocol::Tcp(9001));
+    swarm.dial(multiaddr)?;
+
+    let mut multiaddr = Multiaddr::from(Ipv4Addr::new(127, 0, 0, 1));
+    multiaddr.push(Protocol::Tcp(9002));
+    swarm.dial(multiaddr)?;
+
+    let mut multiaddr = Multiaddr::from(Ipv4Addr::new(127, 0, 0, 1));
+    multiaddr.push(Protocol::Tcp(9003));
+    swarm.dial(multiaddr)?;
+
+    let mut multiaddr = Multiaddr::from(Ipv4Addr::new(127, 0, 0, 1));
+    multiaddr.push(Protocol::Tcp(9004));
+    swarm.dial(multiaddr)?;
 
     // Run
     loop {
