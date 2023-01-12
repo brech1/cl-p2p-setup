@@ -162,11 +162,11 @@ impl NetworkBehaviour for Discovery {
         cx: &mut Context,
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
+        return Poll::Pending;
+
         if !self.started {
             self.started = true;
             self.find_peers();
-
-            return Poll::Pending;
         }
 
         if let Some(dp) = self.get_peers(cx) {
