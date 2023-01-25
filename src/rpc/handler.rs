@@ -10,6 +10,7 @@ use futures::Future;
 use libp2p::swarm::{NegotiatedSubstream, SubstreamProtocol};
 use smallvec::SmallVec;
 use std::{collections::VecDeque, pin::Pin, time::Instant};
+use tokio::time::Sleep;
 use tokio_io_timeout::TimeoutStream;
 use tokio_util::time::{delay_queue, DelayQueue};
 use tokio_util::{codec::Framed, compat::Compat};
@@ -32,6 +33,7 @@ pub type OutboundFramed<TSocket> = Framed<Compat<TSocket>, OutboundCodec>;
 pub struct RPCHandler<Id> {
     listen_protocol: SubstreamProtocol<RPCProtocol, ()>,
     events_out: SmallVec<[HandlerEvent<Id>; 4]>,
+    // Dialing
     dial_queue: SmallVec<[(Id, OutboundRequest); 4]>,
     dial_negotiated: u32,
     // Inbound
@@ -45,6 +47,10 @@ pub struct RPCHandler<Id> {
     current_outbound_substream_id: SubstreamId,
     // Config
     max_dial_negotiated: u32,
+    // State
+    state: HandlerState,
+    outbound_io_error_retries: u8,
+    waker: Option<std::task::Waker>,
 }
 
 // Inbound
@@ -81,4 +87,10 @@ pub enum OutboundSubstreamState {
     },
     Closing(Box<OutboundFramed<NegotiatedSubstream>>),
     Poisoned,
+}
+
+enum HandlerState {
+    Active,
+    ShuttingDown(Pin<Box<Sleep>>),
+    Deactivated,
 }
