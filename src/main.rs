@@ -18,6 +18,7 @@ mod chain;
 mod config;
 mod discovery;
 mod enr;
+mod rpc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
