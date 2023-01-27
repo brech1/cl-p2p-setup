@@ -1,7 +1,6 @@
 use crate::rpc::{
     methods::{ErrorType, RPCCodedResponse, RPCResponse},
-    outbound::OutboundRequest,
-    protocol::InboundRequest,
+    protocol::{InboundRequest, OutboundRequest},
 };
 use libp2p::bytes::{BufMut, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};

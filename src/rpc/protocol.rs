@@ -1,13 +1,38 @@
-use super::methods::{MetaData, Ping, StatusMessage};
-use libp2p::{core::UpgradeInfo, request_response::ProtocolName};
+use super::{
+    codec::{
+        base::{BaseInboundCodec, BaseOutboundCodec},
+        ssz_snappy::{SSZSnappyInboundCodec, SSZSnappyOutboundCodec},
+        InboundCodec, OutboundCodec,
+    },
+    methods::{MetaData, Ping, StatusMessage},
+};
+use futures::{
+    future::BoxFuture,
+    prelude::{AsyncRead, AsyncWrite},
+    FutureExt, SinkExt, StreamExt,
+};
+use libp2p::{
+    core::UpgradeInfo, request_response::ProtocolName, swarm::NegotiatedSubstream, InboundUpgrade,
+    OutboundUpgrade,
+};
+use serde::ser::StdError;
 use ssz::Encode;
-use std::io;
+use std::{fmt::Display, io, time::Duration};
+use tokio_io_timeout::TimeoutStream;
+use tokio_util::{
+    codec::Framed,
+    compat::{Compat, FuturesAsyncReadCompatExt},
+};
 
 pub const MAX_RPC_SIZE_POST_MERGE: usize = 10 * 1_048_576; // 10 * 2**20
 
 pub const PROTOCOL_PREFIX: &str = "/eth2/beacon_chain/req";
 
 pub const PROTOCOL_SUFFIX: &str = "2/ssz_snappy";
+
+const TTFB_TIMEOUT: u64 = 5;
+
+const REQUEST_TIMEOUT: u64 = 15;
 
 // Req/Resp Domain protocols
 #[repr(u8)]
@@ -54,7 +79,7 @@ impl ProtocolId {
                 <Ping as Encode>::ssz_fixed_len(),
                 <Ping as Encode>::ssz_fixed_len(),
             ),
-            _ => RpcLimits::new(0, 0), // Metadata requests are empty
+            _ => RpcLimits::new(0, 0),
         }
     }
 
@@ -117,8 +142,31 @@ impl RpcLimits {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum RPCError {
     Error,
+}
+
+impl StdError for RPCError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        None
+    }
+
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
+
+    fn cause(&self) -> Option<&dyn StdError> {
+        self.source()
+    }
+}
+
+impl Display for RPCError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RPCError::Error => write!(f, "RPC Error"),
+        }
+    }
 }
 
 impl From<tokio::time::error::Elapsed> for RPCError {
@@ -134,6 +182,7 @@ impl From<io::Error> for RPCError {
 }
 
 // Protocol
+#[derive(Debug, Clone, PartialEq)]
 pub struct RPCProtocol {}
 
 impl UpgradeInfo for RPCProtocol {
@@ -153,10 +202,188 @@ impl UpgradeInfo for RPCProtocol {
     }
 }
 
+// Inbound
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboundRequest {
     Status(StatusMessage),
     Goodbye(u64),
     Ping(Ping),
     MetaData,
+}
+
+impl UpgradeInfo for InboundRequest {
+    type Info = ProtocolId;
+    type InfoIter = Vec<Self::Info>;
+
+    // add further protocols as we support more encodings/versions
+    fn protocol_info(&self) -> Self::InfoIter {
+        self.supported_protocols()
+    }
+}
+
+impl InboundRequest {
+    pub fn supported_protocols(&self) -> Vec<ProtocolId> {
+        match self {
+            // add more protocols when versions/encodings are supported
+            InboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status)],
+            InboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye)],
+            InboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping)],
+            InboundRequest::MetaData => vec![ProtocolId::new(Protocol::MetaData)],
+        }
+    }
+
+    pub fn expected_responses(&self) -> u64 {
+        match self {
+            InboundRequest::Status(_) => 1,
+            InboundRequest::Goodbye(_) => 0,
+            InboundRequest::Ping(_) => 1,
+            InboundRequest::MetaData => 1,
+        }
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            InboundRequest::Status(_) => Protocol::Status,
+            InboundRequest::Goodbye(_) => Protocol::Goodbye,
+            InboundRequest::Ping(_) => Protocol::Ping,
+            InboundRequest::MetaData => Protocol::MetaData,
+        }
+    }
+}
+
+pub type InboundFramed<TSocket> =
+    Framed<std::pin::Pin<Box<TimeoutStream<Compat<TSocket>>>>, InboundCodec>;
+
+pub type InboundOutput<TSocket> = (InboundRequest, InboundFramed<TSocket>);
+
+pub type InboundSubstream = InboundFramed<NegotiatedSubstream>;
+
+impl<TSocket> InboundUpgrade<TSocket> for RPCProtocol
+where
+    TSocket: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Output = InboundOutput<TSocket>;
+    type Error = RPCError;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+
+    fn upgrade_inbound(self, socket: TSocket, protocol: ProtocolId) -> Self::Future {
+        async move {
+            let protocol_name = protocol.message_name;
+
+            let socket = socket.compat();
+
+            let codec = {
+                let ssz_snappy_codec = BaseInboundCodec::new(SSZSnappyInboundCodec::new(protocol));
+
+                InboundCodec::SSZSnappy(ssz_snappy_codec)
+            };
+
+            let mut timed_socket = TimeoutStream::new(socket);
+            timed_socket.set_read_timeout(Some(Duration::from_secs(TTFB_TIMEOUT)));
+
+            let socket = Framed::new(Box::pin(timed_socket), codec);
+
+            match protocol_name {
+                Protocol::MetaData => Ok((InboundRequest::MetaData, socket)),
+                _ => {
+                    match tokio::time::timeout(
+                        Duration::from_secs(REQUEST_TIMEOUT),
+                        socket.into_future(),
+                    )
+                    .await
+                    {
+                        Err(e) => Err(RPCError::from(e)),
+                        Ok((Some(Ok(request)), stream)) => Ok((request, stream)),
+                        Ok((Some(Err(e)), _)) => Err(e),
+                        Ok((None, _)) => Err(RPCError::Error),
+                    }
+                }
+            }
+        }
+        .boxed()
+    }
+}
+
+// Outbound
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutboundRequest {
+    Status(StatusMessage),
+    Goodbye(u64),
+    Ping(Ping),
+    MetaData,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutboundRequestContainer {
+    pub req: OutboundRequest,
+}
+
+impl OutboundRequest {
+    pub fn supported_protocols(&self) -> Vec<ProtocolId> {
+        match self {
+            OutboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status)],
+            OutboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye)],
+            OutboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping)],
+            OutboundRequest::MetaData => vec![ProtocolId::new(Protocol::MetaData)],
+        }
+    }
+
+    pub fn expected_responses(&self) -> u64 {
+        match self {
+            OutboundRequest::Status(_) => 1,
+            OutboundRequest::Goodbye(_) => 0,
+            OutboundRequest::Ping(_) => 1,
+            OutboundRequest::MetaData => 1,
+        }
+    }
+
+    pub fn protocol(&self) -> Protocol {
+        match self {
+            OutboundRequest::Status(_) => Protocol::Status,
+            OutboundRequest::Goodbye(_) => Protocol::Goodbye,
+            OutboundRequest::Ping(_) => Protocol::Ping,
+            OutboundRequest::MetaData => Protocol::MetaData,
+        }
+    }
+}
+
+impl UpgradeInfo for OutboundRequestContainer {
+    type Info = ProtocolId;
+    type InfoIter = Vec<Self::Info>;
+
+    fn protocol_info(&self) -> Self::InfoIter {
+        self.req.supported_protocols()
+    }
+}
+
+pub type OutboundFramed<TSocket> = Framed<Compat<TSocket>, OutboundCodec>;
+
+impl<TSocket> OutboundUpgrade<TSocket> for OutboundRequestContainer
+where
+    TSocket: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    type Output = OutboundFramed<TSocket>;
+    type Error = RPCError;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+
+    fn upgrade_outbound(self, socket: TSocket, protocol: Self::Info) -> Self::Future {
+        let socket = socket.compat();
+
+        let codec = {
+            let ssz_snappy_codec = BaseOutboundCodec::new(SSZSnappyOutboundCodec::new(protocol));
+
+            OutboundCodec::SSZSnappy(ssz_snappy_codec)
+        };
+
+        let mut socket = Framed::new(socket, codec);
+
+        async {
+            socket.send(self.req).await?;
+            socket.close().await?;
+            Ok(socket)
+        }
+        .boxed()
+    }
 }

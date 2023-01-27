@@ -3,9 +3,7 @@ use ssz_derive::{Decode, Encode};
 use ssz_types::{typenum::U256, VariableList};
 use tree_hash::Hash256;
 
-/// Maximum length of error message.
 pub type MaxErrorLen = U256;
-pub const MAX_ERROR_LEN: u64 = 256;
 
 #[derive(Debug, Clone)]
 pub struct ErrorType(pub VariableList<u8, MaxErrorLen>);
@@ -55,6 +53,10 @@ impl RPCCodedResponse {
 
     pub fn from_error(_response_code: u8, _err: ErrorType) -> Self {
         RPCCodedResponse::Error
+    }
+
+    pub fn close_after(&self) -> bool {
+        !matches!(self, RPCCodedResponse::Success(_))
     }
 }
 

@@ -1,7 +1,8 @@
 use crate::rpc::{
     methods::{ErrorType, MetaData, RPCCodedResponse, RPCResponse},
-    outbound::OutboundRequest,
-    protocol::{InboundRequest, Protocol, ProtocolId, RPCError, MAX_RPC_SIZE_POST_MERGE},
+    protocol::{
+        InboundRequest, OutboundRequest, Protocol, ProtocolId, RPCError, MAX_RPC_SIZE_POST_MERGE,
+    },
 };
 use libp2p::bytes::BytesMut;
 use snap::{read::FrameDecoder, write::FrameEncoder};
@@ -24,7 +25,7 @@ pub struct SSZSnappyInboundCodec {
 }
 
 impl SSZSnappyInboundCodec {
-    fn new(protocol: ProtocolId) -> Self {
+    pub fn new(protocol: ProtocolId) -> Self {
         Self {
             protocol,
             inner: Uvi::default(),
@@ -129,7 +130,7 @@ pub struct SSZSnappyOutboundCodec {
 }
 
 impl SSZSnappyOutboundCodec {
-    fn new(protocol: ProtocolId) -> Self {
+    pub fn new(protocol: ProtocolId) -> Self {
         Self {
             protocol,
             inner: Uvi::default(),
@@ -192,9 +193,8 @@ impl Decoder for SSZSnappyOutboundCodec {
             return Err(RPCError::Error);
         }
 
-        // Calculate worst case compression length for given uncompressed length
         let max_compressed_len = snap::raw::max_compress_len(length) as u64;
-        // Create a limit reader as a wrapper that reads only upto `max_compressed_len` from `src`.
+
         let limit_reader = Cursor::new(src.as_ref()).take(max_compressed_len);
         let mut reader = FrameDecoder::new(limit_reader);
 
@@ -236,21 +236,17 @@ impl OutboundCodec<OutboundRequest> for SSZSnappyOutboundCodec {
             None => return Ok(None),
         };
 
-        // Should not attempt to decode rpc chunks with `length > max_packet_size` or not within bounds of
-        // packet size for ssz container corresponding to `ErrorType`.
         if length > MAX_RPC_SIZE_POST_MERGE {
             return Err(RPCError::Error);
         }
 
-        // Calculate worst case compression length for given uncompressed length
         let max_compressed_len = snap::raw::max_compress_len(length) as u64;
-        // Create a limit reader as a wrapper that reads only upto `max_compressed_len` from `src`.
+
         let limit_reader = Cursor::new(src.as_ref()).take(max_compressed_len);
         let mut reader = FrameDecoder::new(limit_reader);
         let mut decoded_buffer = vec![0; length];
         match reader.read_exact(&mut decoded_buffer) {
             Ok(()) => {
-                // `n` is how many bytes the reader read in the compressed stream
                 let n = reader.get_ref().get_ref().position();
                 self.len = None;
                 let _read_bytes = src.split_to(n as usize);

@@ -1,5 +1,6 @@
 use crate::config::{DUPLICATE_CACHE_TIME, GOSSIP_MAX_SIZE_BELLATRIX};
 use crate::discovery::Discovery;
+use crate::rpc::{ReqId, RequestId, RPC};
 use libp2p::futures::StreamExt;
 use libp2p::gossipsub::subscription_filter::AllowAllSubscriptionFilter;
 use libp2p::gossipsub::{
@@ -87,17 +88,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
 
+    let rpc: RPC<RequestId<()>> = RPC::new();
+
     // We create a custom network behaviour that combines Gossipsub and Discv5.
     #[derive(NetworkBehaviour)]
-    struct Behaviour {
+    struct Behaviour<AppReqId: ReqId> {
         gossipsub: Gossipsub<SnappyTransform, AllowAllSubscriptionFilter>,
         discovery: Discovery,
+        rpc: RPC<RequestId<AppReqId>>,
     }
 
     let behaviour = {
         Behaviour {
             gossipsub,
             discovery,
+            rpc,
         }
     };
 
@@ -127,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         }
                     },
+                    BehaviourEvent::Rpc(ev) => println!("RPC: {ev:?}")
                 },
                 SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
