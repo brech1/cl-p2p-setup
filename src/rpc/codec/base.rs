@@ -15,6 +15,7 @@ pub trait OutboundCodec<TItem>: Encoder<TItem> + Decoder {
 }
 
 // Inbound codec
+
 pub struct BaseInboundCodec<TCodec>
 where
     TCodec: Encoder<RPCCodedResponse> + Decoder,
@@ -102,11 +103,10 @@ where
     type Error = <TCodec as Decoder>::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // if we have only received the response code, wait for more bytes
         if src.len() <= 1 {
             return Ok(None);
         }
-        // using the response code determine which kind of payload needs to be decoded.
+
         let response_code = self.current_response_code.unwrap_or_else(|| {
             let resp_code = src.split_to(1)[0];
             self.current_response_code = Some(resp_code);
@@ -115,24 +115,20 @@ where
 
         let inner_result = {
             if RPCCodedResponse::is_response(response_code) {
-                // decode an actual response and mutates the buffer if enough bytes have been read
-                // returning the result.
                 self.inner
                     .decode(src)
                     .map(|r| r.map(RPCCodedResponse::Success))
             } else {
-                // decode an error
                 self.inner
                     .decode_error(src)
                     .map(|r| r.map(|resp| RPCCodedResponse::from_error(response_code, resp)))
             }
         };
-        // if the inner decoder was capable of decoding a chunk, we need to reset the current
-        // response code for the next chunk
+
         if let Ok(Some(_)) = inner_result {
             self.current_response_code = None;
         }
-        // return the result
+
         inner_result
     }
 }
