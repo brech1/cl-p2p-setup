@@ -123,7 +123,7 @@ impl<Id> RPCHandler<Id> {
 
     fn shutdown(&mut self, goodbye_reason: Option<Id>) {
         if matches!(self.state, HandlerState::Active) {
-            while let Some((id, req)) = self.dial_queue.pop() {
+            while let Some((_, _)) = self.dial_queue.pop() {
                 self.events_out.push(Err("handler error"));
             }
 
@@ -371,7 +371,6 @@ where
                         self.events_out.push(Err("Stream Timeout"));
 
                         if info.pending_items.back().map(|l| l.close_after()) == Some(false) {
-                            // if the last chunk does not close the stream, append an error
                             info.pending_items.push_back(RPCCodedResponse::Error);
                         }
                     }
@@ -386,8 +385,11 @@ where
         loop {
             match self.outbound_substreams_delay.poll_expired(cx) {
                 Poll::Ready(Some(Ok(outbound_id))) => {
-                    if let Some(OutboundInfo { proto, req_id, .. }) =
-                        self.outbound_substreams.remove(outbound_id.get_ref())
+                    if let Some(OutboundInfo {
+                        proto: _,
+                        req_id: _,
+                        ..
+                    }) = self.outbound_substreams.remove(outbound_id.get_ref())
                     {
                         return Poll::Ready(ConnectionHandlerEvent::Custom(Err("Stream Timeout")));
                     }

@@ -1,7 +1,7 @@
 pub(crate) mod codec;
 mod handler;
 pub mod methods;
-mod protocol;
+pub mod protocol;
 use self::handler::{RPCHandler, SubstreamId};
 use self::methods::{RPCCodedResponse, RPCResponse, StatusMessage};
 use self::protocol::{OutboundRequest, RPCProtocol};
@@ -105,7 +105,7 @@ where
 
     fn poll(
         &mut self,
-        cx: &mut Context,
+        _cx: &mut Context,
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
         if !self.events.is_empty() {
@@ -116,8 +116,6 @@ where
 }
 
 // API
-
-pub type PeerRequestId = (ConnectionId, SubstreamId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestId<AppReqId> {

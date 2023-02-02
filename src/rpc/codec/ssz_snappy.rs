@@ -43,11 +43,14 @@ impl Encoder<RPCCodedResponse> for SSZSnappyInboundCodec {
         _dst: &mut libp2p::bytes::BytesMut,
     ) -> Result<(), Self::Error> {
         let _bytes = match &item {
-            RPCCodedResponse::Success(m) => println!("{m:?}"),
-            RPCCodedResponse::Error => (),
-            RPCCodedResponse::StreamTermination => (),
+            RPCCodedResponse::Success(resp) => match &resp {
+                RPCResponse::Status(res) => res.as_ssz_bytes(),
+                RPCResponse::Pong(res) => res.data.as_ssz_bytes(),
+                RPCResponse::MetaData(res) => res.as_ssz_bytes(),
+            },
+            RPCCodedResponse::Error => "".as_bytes().to_vec(),
+            RPCCodedResponse::StreamTermination => "".as_bytes().to_vec(),
         };
-
         Ok(())
     }
 }

@@ -44,6 +44,7 @@ pub enum Protocol {
     BlocksByRoot,
     Ping,
     MetaData,
+    LightClientBootstrap,
 }
 
 impl std::fmt::Display for Protocol {
@@ -55,12 +56,29 @@ impl std::fmt::Display for Protocol {
             Protocol::BlocksByRoot => "beacon_blocks_by_root",
             Protocol::Ping => "ping",
             Protocol::MetaData => "metadata",
+            Protocol::LightClientBootstrap => "light_client_bootstrap",
         };
         f.write_str(repr)
     }
 }
 
-/// Tracks the types in a protocol id.
+// Protocol version
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Version {
+    V1,
+    V2,
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let repr = match self {
+            Version::V1 => "1",
+            Version::V2 => "2",
+        };
+        f.write_str(repr)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProtocolId {
     pub message_name: Protocol,
@@ -86,7 +104,6 @@ impl ProtocolId {
     pub fn rpc_response_limits(&self) -> RpcLimits {
         match self.message_name {
             // BlocksByRange, BlocksByRoot not impl
-            // Goodbye has no response
             Protocol::Status => RpcLimits::new(
                 <StatusMessage as Encode>::ssz_fixed_len(),
                 <StatusMessage as Encode>::ssz_fixed_len(),
@@ -225,7 +242,6 @@ impl UpgradeInfo for InboundRequest {
 impl InboundRequest {
     pub fn supported_protocols(&self) -> Vec<ProtocolId> {
         match self {
-            // add more protocols when versions/encodings are supported
             InboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status)],
             InboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye)],
             InboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping)],
