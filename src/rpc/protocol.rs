@@ -28,7 +28,7 @@ pub const MAX_RPC_SIZE_POST_MERGE: usize = 10 * 1_048_576; // 10 * 2**20
 
 pub const PROTOCOL_PREFIX: &str = "/eth2/beacon_chain/req";
 
-pub const PROTOCOL_SUFFIX: &str = "2/ssz_snappy";
+pub const ENCODING: &str = "ssz_snappy";
 
 const TTFB_TIMEOUT: u64 = 5;
 
@@ -82,6 +82,7 @@ impl std::fmt::Display for Version {
 #[derive(Clone, Debug)]
 pub struct ProtocolId {
     pub message_name: Protocol,
+    pub version: Version,
     protocol_id: String,
 }
 
@@ -103,7 +104,6 @@ impl ProtocolId {
 
     pub fn rpc_response_limits(&self) -> RpcLimits {
         match self.message_name {
-            // BlocksByRange, BlocksByRoot not impl
             Protocol::Status => RpcLimits::new(
                 <StatusMessage as Encode>::ssz_fixed_len(),
                 <StatusMessage as Encode>::ssz_fixed_len(),
@@ -112,7 +112,10 @@ impl ProtocolId {
                 <Ping as Encode>::ssz_fixed_len(),
                 <Ping as Encode>::ssz_fixed_len(),
             ),
-            Protocol::MetaData => RpcLimits::new(0, <MetaData as Encode>::ssz_fixed_len()),
+            Protocol::MetaData => RpcLimits::new(
+                <MetaData as Encode>::ssz_fixed_len(),
+                <MetaData as Encode>::ssz_fixed_len(),
+            ),
             _ => RpcLimits::new(0, 0),
         }
     }
@@ -126,11 +129,15 @@ impl ProtocolId {
 }
 
 impl ProtocolId {
-    pub fn new(message_name: Protocol) -> Self {
-        let protocol_id = format!("{}/{}/{}", PROTOCOL_PREFIX, message_name, PROTOCOL_SUFFIX);
+    pub fn new(message_name: Protocol, version: Version) -> Self {
+        let protocol_id = format!(
+            "{}/{}/{}/{}",
+            PROTOCOL_PREFIX, message_name, version, ENCODING
+        );
 
         ProtocolId {
             message_name,
+            version,
             protocol_id,
         }
     }
@@ -206,15 +213,13 @@ impl UpgradeInfo for RPCProtocol {
     type Info = ProtocolId;
     type InfoIter = Vec<Self::Info>;
 
-    /// The list of supported RPC protocols for Lighthouse.
     fn protocol_info(&self) -> Self::InfoIter {
         vec![
-            ProtocolId::new(Protocol::Status),
-            ProtocolId::new(Protocol::Goodbye),
-            ProtocolId::new(Protocol::BlocksByRange),
-            ProtocolId::new(Protocol::BlocksByRoot),
-            ProtocolId::new(Protocol::Ping),
-            ProtocolId::new(Protocol::MetaData),
+            ProtocolId::new(Protocol::Status, Version::V1),
+            ProtocolId::new(Protocol::Goodbye, Version::V1),
+            ProtocolId::new(Protocol::Ping, Version::V1),
+            ProtocolId::new(Protocol::MetaData, Version::V2),
+            ProtocolId::new(Protocol::MetaData, Version::V1),
         ]
     }
 }
@@ -229,26 +234,7 @@ pub enum InboundRequest {
     MetaData,
 }
 
-impl UpgradeInfo for InboundRequest {
-    type Info = ProtocolId;
-    type InfoIter = Vec<Self::Info>;
-
-    // add further protocols as we support more encodings/versions
-    fn protocol_info(&self) -> Self::InfoIter {
-        self.supported_protocols()
-    }
-}
-
 impl InboundRequest {
-    pub fn supported_protocols(&self) -> Vec<ProtocolId> {
-        match self {
-            InboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status)],
-            InboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye)],
-            InboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping)],
-            InboundRequest::MetaData => vec![ProtocolId::new(Protocol::MetaData)],
-        }
-    }
-
     pub fn expected_responses(&self) -> u64 {
         match self {
             InboundRequest::Status(_) => 1,
@@ -323,6 +309,20 @@ where
 
 // Outbound
 
+#[derive(Debug, Clone)]
+pub struct OutboundRequestContainer {
+    pub req: OutboundRequest,
+}
+
+impl UpgradeInfo for OutboundRequestContainer {
+    type Info = ProtocolId;
+    type InfoIter = Vec<Self::Info>;
+
+    fn protocol_info(&self) -> Self::InfoIter {
+        self.req.supported_protocols()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutboundRequest {
     Status(StatusMessage),
@@ -331,18 +331,13 @@ pub enum OutboundRequest {
     MetaData,
 }
 
-#[derive(Debug, Clone)]
-pub struct OutboundRequestContainer {
-    pub req: OutboundRequest,
-}
-
 impl OutboundRequest {
     pub fn supported_protocols(&self) -> Vec<ProtocolId> {
         match self {
-            OutboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status)],
-            OutboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye)],
-            OutboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping)],
-            OutboundRequest::MetaData => vec![ProtocolId::new(Protocol::MetaData)],
+            OutboundRequest::Status(_) => vec![ProtocolId::new(Protocol::Status, Version::V1)],
+            OutboundRequest::Goodbye(_) => vec![ProtocolId::new(Protocol::Goodbye, Version::V1)],
+            OutboundRequest::Ping(_) => vec![ProtocolId::new(Protocol::Ping, Version::V1)],
+            OutboundRequest::MetaData => vec![ProtocolId::new(Protocol::MetaData, Version::V2)],
         }
     }
 
@@ -362,15 +357,6 @@ impl OutboundRequest {
             OutboundRequest::Ping(_) => Protocol::Ping,
             OutboundRequest::MetaData => Protocol::MetaData,
         }
-    }
-}
-
-impl UpgradeInfo for OutboundRequestContainer {
-    type Info = ProtocolId;
-    type InfoIter = Vec<Self::Info>;
-
-    fn protocol_info(&self) -> Self::InfoIter {
-        self.req.supported_protocols()
     }
 }
 

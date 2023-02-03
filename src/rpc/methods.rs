@@ -1,12 +1,21 @@
 use serde::Serialize;
 use ssz_derive::{Decode, Encode};
-use ssz_types::{typenum::U256, VariableList};
+use ssz_types::{
+    typenum::{U256, U4, U64},
+    BitVector, VariableList,
+};
 use tree_hash::Hash256;
 
 pub type MaxErrorLen = U256;
 
 #[derive(Debug, Clone)]
 pub struct ErrorType(pub VariableList<u8, MaxErrorLen>);
+
+pub type SubnetBitfieldLength = U64;
+pub type SyncCommitteeSubnetCount = U4;
+
+pub type EnrAttestationBitfield = BitVector<SubnetBitfieldLength>;
+pub type EnrSyncCommitteeBitfield = BitVector<SyncCommitteeSubnetCount>;
 
 // https://github.com/ethereum/consensus-specs/blob/dev/specs/phase0/p2p-interface.md#messages
 
@@ -27,6 +36,8 @@ pub struct Ping {
 #[derive(Clone, Debug, PartialEq, Serialize, Encode, Decode)]
 pub struct MetaData {
     pub seq_number: u64,
+    pub attnets: EnrAttestationBitfield,
+    pub syncnets: EnrSyncCommitteeBitfield,
 }
 
 // Response
@@ -35,7 +46,6 @@ pub struct MetaData {
 pub enum RPCCodedResponse {
     Success(RPCResponse),
     Error,
-    StreamTermination,
 }
 
 impl RPCCodedResponse {
@@ -43,7 +53,6 @@ impl RPCCodedResponse {
         match self {
             RPCCodedResponse::Success(_) => Some(0),
             RPCCodedResponse::Error => Some(1),
-            RPCCodedResponse::StreamTermination => None,
         }
     }
 

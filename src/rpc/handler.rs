@@ -622,22 +622,18 @@ async fn send_message_to_inbound_substream(
     message: RPCCodedResponse,
     last_chunk: bool,
 ) -> Result<(InboundSubstream, bool), RPCError> {
-    if matches!(message, RPCCodedResponse::StreamTermination) {
-        substream.close().await.map(|_| (substream, true))
-    } else {
-        let is_error = matches!(message, RPCCodedResponse::Error);
+    let is_error = matches!(message, RPCCodedResponse::Error);
 
-        let send_result = substream.send(message).await;
+    let send_result = substream.send(message).await;
 
-        if last_chunk || is_error || send_result.is_err() {
-            let close_result = substream.close().await.map(|_| (substream, true));
-            if let Err(e) = send_result {
-                return Err(e);
-            } else {
-                return close_result;
-            }
+    if last_chunk || is_error || send_result.is_err() {
+        let close_result = substream.close().await.map(|_| (substream, true));
+        if let Err(e) = send_result {
+            return Err(e);
+        } else {
+            return close_result;
         }
-
-        send_result.map(|_| (substream, false))
     }
+
+    send_result.map(|_| (substream, false))
 }

@@ -1,7 +1,9 @@
+use super::base::OutboundCodec;
 use crate::rpc::{
     methods::{ErrorType, MetaData, RPCCodedResponse, RPCResponse},
     protocol::{
-        InboundRequest, OutboundRequest, Protocol, ProtocolId, RPCError, MAX_RPC_SIZE_POST_MERGE,
+        InboundRequest, OutboundRequest, Protocol, ProtocolId, RPCError, Version,
+        MAX_RPC_SIZE_POST_MERGE,
     },
 };
 use libp2p::bytes::BytesMut;
@@ -11,8 +13,6 @@ use ssz_types::VariableList;
 use std::io::{Cursor, Read, Write};
 use tokio_util::codec::{Decoder, Encoder};
 use unsigned_varint::codec::Uvi;
-
-use super::base::OutboundCodec;
 
 const CONTEXT_BYTES_LEN: usize = 4;
 
@@ -49,7 +49,6 @@ impl Encoder<RPCCodedResponse> for SSZSnappyInboundCodec {
                 RPCResponse::MetaData(res) => res.as_ssz_bytes(),
             },
             RPCCodedResponse::Error => "".as_bytes().to_vec(),
-            RPCCodedResponse::StreamTermination => "".as_bytes().to_vec(),
         };
         Ok(())
     }
