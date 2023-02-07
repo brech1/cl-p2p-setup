@@ -52,16 +52,12 @@ impl RPCCodedResponse {
     pub fn as_u8(&self) -> Option<u8> {
         match self {
             RPCCodedResponse::Success(_) => Some(0),
-            RPCCodedResponse::Error => Some(1),
+            RPCCodedResponse::Error => Some(4),
         }
     }
 
     pub fn is_response(response_code: u8) -> bool {
         matches!(response_code, 0)
-    }
-
-    pub fn from_error(_response_code: u8, _err: ErrorType) -> Self {
-        RPCCodedResponse::Error
     }
 
     pub fn close_after(&self) -> bool {

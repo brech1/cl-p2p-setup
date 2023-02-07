@@ -1,9 +1,8 @@
 use super::base::OutboundCodec;
 use crate::rpc::{
-    methods::{ErrorType, MetaData, RPCCodedResponse, RPCResponse},
+    methods::{ErrorType, MetaData, Ping, RPCCodedResponse, RPCResponse, StatusMessage},
     protocol::{
-        InboundRequest, OutboundRequest, Protocol, ProtocolId, RPCError, Version,
-        MAX_RPC_SIZE_POST_MERGE,
+        InboundRequest, OutboundRequest, Protocol, ProtocolId, RPCError, MAX_RPC_SIZE_POST_MERGE,
     },
 };
 use libp2p::bytes::BytesMut;
@@ -13,8 +12,6 @@ use ssz_types::VariableList;
 use std::io::{Cursor, Read, Write};
 use tokio_util::codec::{Decoder, Encoder};
 use unsigned_varint::codec::Uvi;
-
-const CONTEXT_BYTES_LEN: usize = 4;
 
 // Outbound Codec
 
@@ -37,19 +34,29 @@ impl SSZSnappyInboundCodec {
 impl Encoder<RPCCodedResponse> for SSZSnappyInboundCodec {
     type Error = RPCError;
 
-    fn encode(
-        &mut self,
-        item: RPCCodedResponse,
-        _dst: &mut libp2p::bytes::BytesMut,
-    ) -> Result<(), Self::Error> {
-        let _bytes = match &item {
+    fn encode(&mut self, item: RPCCodedResponse, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let bytes = match &item {
             RPCCodedResponse::Success(resp) => match &resp {
                 RPCResponse::Status(res) => res.as_ssz_bytes(),
                 RPCResponse::Pong(res) => res.data.as_ssz_bytes(),
                 RPCResponse::MetaData(res) => res.as_ssz_bytes(),
             },
-            RPCCodedResponse::Error => "".as_bytes().to_vec(),
+            RPCCodedResponse::Error => "".into(),
         };
+
+        if bytes.len() > MAX_RPC_SIZE_POST_MERGE {
+            return Err(RPCError::Error);
+        }
+
+        self.inner
+            .encode(bytes.len(), dst)
+            .map_err(RPCError::from)?;
+
+        let mut writer = FrameEncoder::new(Vec::new());
+        writer.write_all(&bytes).map_err(RPCError::from)?;
+        writer.flush().map_err(RPCError::from)?;
+
+        dst.extend_from_slice(writer.get_ref());
         Ok(())
     }
 }
@@ -175,15 +182,6 @@ impl Decoder for SSZSnappyOutboundCodec {
     type Error = RPCError;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        if self.protocol.has_context_bytes() {
-            if src.len() >= CONTEXT_BYTES_LEN {
-                let context_bytes = src.split_to(CONTEXT_BYTES_LEN);
-                let mut result = [0; CONTEXT_BYTES_LEN];
-                result.copy_from_slice(context_bytes.as_ref());
-            } else {
-                return Ok(None);
-            }
-        }
         let length = match handle_length(&mut self.inner, &mut self.len, src)? {
             Some(len) => len,
             None => return Ok(None),
@@ -208,18 +206,7 @@ impl Decoder for SSZSnappyOutboundCodec {
                 self.len = None;
                 let _read_bytes = src.split_to(n as usize);
 
-                if self.protocol.message_name == Protocol::MetaData {
-                    if !decoded_buffer.is_empty() {
-                        Err(RPCError::Error)
-                    } else {
-                        // TODO: Fix unwrap
-                        Ok(Some(RPCResponse::MetaData(
-                            MetaData::from_ssz_bytes(&decoded_buffer).unwrap(),
-                        )))
-                    }
-                } else {
-                    return Err(RPCError::Error);
-                }
+                handle_response(self.protocol.message_name, &decoded_buffer)
             }
             Err(_) => Err(RPCError::Error),
         }
@@ -258,5 +245,23 @@ impl OutboundCodec<OutboundRequest> for SSZSnappyOutboundCodec {
             }
             Err(_) => Err(RPCError::Error),
         }
+    }
+}
+
+fn handle_response(
+    protocol: Protocol,
+    decoded_buffer: &[u8],
+) -> Result<Option<RPCResponse>, RPCError> {
+    match protocol {
+        Protocol::Status => Ok(Some(RPCResponse::Status(
+            StatusMessage::from_ssz_bytes(decoded_buffer).unwrap(),
+        ))),
+        Protocol::Ping => Ok(Some(RPCResponse::Pong(Ping {
+            data: u64::from_ssz_bytes(decoded_buffer).unwrap(),
+        }))),
+        Protocol::MetaData => Ok(Some(RPCResponse::MetaData(
+            MetaData::from_ssz_bytes(decoded_buffer).unwrap(),
+        ))),
+        _ => Err(RPCError::Error),
     }
 }

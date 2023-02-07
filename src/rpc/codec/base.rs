@@ -121,7 +121,7 @@ where
             } else {
                 self.inner
                     .decode_error(src)
-                    .map(|r| r.map(|resp| RPCCodedResponse::from_error(response_code, resp)))
+                    .map(|r| r.map(|_| RPCCodedResponse::Error))
             }
         };
 

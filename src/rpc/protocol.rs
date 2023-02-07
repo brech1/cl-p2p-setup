@@ -149,7 +149,8 @@ impl ProtocolName for ProtocolId {
     }
 }
 
-// Represents the ssz length bounds for RPC messages.
+// SSZ length bounds for RPC messages.
+
 #[derive(Debug, PartialEq)]
 pub struct RpcLimits {
     pub min: usize,
@@ -166,46 +167,8 @@ impl RpcLimits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum RPCError {
-    Error,
-}
-
-impl StdError for RPCError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        None
-    }
-
-    fn description(&self) -> &str {
-        "description() is deprecated; use Display"
-    }
-
-    fn cause(&self) -> Option<&dyn StdError> {
-        self.source()
-    }
-}
-
-impl Display for RPCError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RPCError::Error => write!(f, "RPC Error"),
-        }
-    }
-}
-
-impl From<tokio::time::error::Elapsed> for RPCError {
-    fn from(_: tokio::time::error::Elapsed) -> Self {
-        RPCError::Error
-    }
-}
-
-impl From<io::Error> for RPCError {
-    fn from(_err: io::Error) -> Self {
-        RPCError::Error
-    }
-}
-
 // Protocol
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RPCProtocol {}
 
@@ -219,7 +182,6 @@ impl UpgradeInfo for RPCProtocol {
             ProtocolId::new(Protocol::Goodbye, Version::V1),
             ProtocolId::new(Protocol::Ping, Version::V1),
             ProtocolId::new(Protocol::MetaData, Version::V2),
-            ProtocolId::new(Protocol::MetaData, Version::V1),
         ]
     }
 }
@@ -387,5 +349,46 @@ where
             Ok(socket)
         }
         .boxed()
+    }
+}
+
+// RPC Error
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RPCError {
+    Error,
+}
+
+impl StdError for RPCError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        None
+    }
+
+    fn description(&self) -> &str {
+        "description() is deprecated; use Display"
+    }
+
+    fn cause(&self) -> Option<&dyn StdError> {
+        self.source()
+    }
+}
+
+impl Display for RPCError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RPCError::Error => write!(f, "RPC Error"),
+        }
+    }
+}
+
+impl From<tokio::time::error::Elapsed> for RPCError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        RPCError::Error
+    }
+}
+
+impl From<io::Error> for RPCError {
+    fn from(_err: io::Error) -> Self {
+        RPCError::Error
     }
 }

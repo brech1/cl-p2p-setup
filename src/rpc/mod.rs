@@ -86,21 +86,12 @@ where
         conn_id: ConnectionId,
         event: <Self::ConnectionHandler as ConnectionHandler>::OutEvent,
     ) {
-        if let Ok(RPCReceived::Request(ref id, ref req)) = event {
-            self.events
-                .push(NetworkBehaviourAction::GenerateEvent(RPCMessage {
-                    peer_id,
-                    conn_id,
-                    event,
-                }))
-        } else {
-            self.events
-                .push(NetworkBehaviourAction::GenerateEvent(RPCMessage {
-                    peer_id,
-                    conn_id,
-                    event,
-                }));
-        }
+        self.events
+            .push(NetworkBehaviourAction::GenerateEvent(RPCMessage {
+                peer_id,
+                conn_id,
+                event,
+            }))
     }
 
     fn poll(
@@ -123,7 +114,7 @@ pub enum RequestId<AppReqId> {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(PartialEq)]
 pub enum Request {
     Status(StatusMessage),
 }
@@ -136,7 +127,7 @@ impl std::convert::From<Request> for OutboundRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(PartialEq)]
 pub enum Response {
     Status(StatusMessage),
 }

@@ -224,7 +224,10 @@ where
                     self.current_inbound_substream_id,
                     InboundInfo {
                         state: awaiting_stream,
-                        pending_items: VecDeque::with_capacity(expected_responses as usize),
+                        pending_items: VecDeque::with_capacity(std::cmp::min(
+                            expected_responses,
+                            128,
+                        ) as usize),
                         delay_key: Some(delay_key),
                         protocol: req.protocol(),
                         request_start_time: Instant::now(),
@@ -232,7 +235,7 @@ where
                     },
                 );
             } else {
-                self.events_out.push(Err("handler error"));
+                self.events_out.push(Err("HandlerRejected"));
                 return self.shutdown(None);
             }
         }
@@ -245,7 +248,6 @@ where
             self.current_inbound_substream_id,
             req,
         )));
-
         self.current_inbound_substream_id.0 += 1;
     }
 
@@ -259,7 +261,7 @@ where
         let proto = request.protocol();
 
         if matches!(self.state, HandlerState::Deactivated) {
-            self.events_out.push(Err("Handler Deactivated"));
+            self.events_out.push(Err("HandlerState::Deactivated"));
         }
 
         let expected_responses = request.expected_responses();
@@ -324,7 +326,9 @@ where
 
         self.outbound_io_error_retries = 0;
 
-        self.events_out.push(Err("Handler error"));
+        println!("Dial upgrade error: {:?}", error);
+
+        self.events_out.push(Err("Dial upgrade error"));
     }
 
     fn poll(
@@ -367,10 +371,10 @@ where
                 Poll::Ready(Some(Ok(inbound_id))) => {
                     if let Some(info) = self.inbound_substreams.get_mut(inbound_id.get_ref()) {
                         info.delay_key = None;
-
                         self.events_out.push(Err("Stream Timeout"));
 
                         if info.pending_items.back().map(|l| l.close_after()) == Some(false) {
+                            println!("Request timed out");
                             info.pending_items.push_back(RPCCodedResponse::Error);
                         }
                     }
@@ -391,10 +395,15 @@ where
                         ..
                     }) = self.outbound_substreams.remove(outbound_id.get_ref())
                     {
-                        return Poll::Ready(ConnectionHandlerEvent::Custom(Err("Stream Timeout")));
+                        let outbound_err = "Stream Timeout";
+
+                        return Poll::Ready(ConnectionHandlerEvent::Custom(Err(outbound_err)));
+                    } else {
+                        println!("timed out substream not in the books");
                     }
                 }
-                Poll::Ready(Some(Err(_))) => {
+                Poll::Ready(Some(Err(e))) => {
+                    println!("Outbound substream poll failed");
                     return Poll::Ready(ConnectionHandlerEvent::Close(RPCError::Error));
                 }
                 Poll::Pending | Poll::Ready(None) => break,
@@ -428,11 +437,12 @@ where
                                     self.inbound_substreams_delay.remove(delay_key);
                                 }
                                 if let Err(_) = res {
-                                    self.events_out.push(Err("Err"));
+                                    self.events_out
+                                        .push(Err("Error shutting down the substream"));
                                 }
                                 if info.pending_items.back().map(|l| l.close_after()) == Some(false)
                                 {
-                                    self.events_out.push(Err("Disconnected"));
+                                    self.events_out.push(Err("Cancel Request"));
                                 }
                             }
                         }
@@ -471,12 +481,16 @@ where
                                 }
                                 break;
                             }
-                            Poll::Ready(Err(_)) => {
+                            Poll::Ready(Err(error)) => {
+                                println!("Error when trying to send a response: {}", error);
+
                                 substreams_to_remove.push(*id);
                                 if let Some(ref delay_key) = info.delay_key {
                                     self.inbound_substreams_delay.remove(delay_key);
                                 }
-                                self.events_out.push(Err("Handler Error"));
+
+                                self.events_out.push(Err("Response error"));
+
                                 break;
                             }
                             Poll::Pending => {
@@ -512,7 +526,7 @@ where
                     request: _,
                 } if deactivated => {
                     entry.get_mut().state = OutboundSubstreamState::Closing(substream);
-                    self.events_out.push(Err("RPC Disconnected"))
+                    self.events_out.push(Err("Handler deactivated"))
                 }
                 OutboundSubstreamState::RequestPendingResponse {
                     mut substream,
@@ -522,7 +536,6 @@ where
                         if request.expected_responses() > 1 && !response.close_after() {
                             let substream_entry = entry.get_mut();
                             let delay_key = &substream_entry.delay_key;
-
                             let remaining_chunks = substream_entry
                                 .remaining_chunks
                                 .map(|count| count.saturating_sub(1))
@@ -544,30 +557,32 @@ where
                         }
 
                         let id = entry.get().req_id;
-                        // let proto = entry.get().proto;
+                        let proto = entry.get().proto;
 
                         let received = match response {
                             RPCCodedResponse::Success(resp) => Ok(RPCReceived::Response(id, resp)),
-                            RPCCodedResponse::Error => Err("Handler Error"),
-                            _ => Err("Handler Error"),
+                            RPCCodedResponse::Error => Err("RPC Error"),
                         };
 
                         return Poll::Ready(ConnectionHandlerEvent::Custom(received));
                     }
                     Poll::Ready(None) => {
                         let delay_key = &entry.get().delay_key;
-                        // let request_id = entry.get().req_id;
+                        let request_id = entry.get().req_id;
                         self.outbound_substreams_delay.remove(delay_key);
                         entry.remove_entry();
+
+                        let outbound_err = "Incomplete response";
+                        return Poll::Ready(ConnectionHandlerEvent::Custom(Err(outbound_err)));
                     }
                     Poll::Pending => {
                         entry.get_mut().state =
                             OutboundSubstreamState::RequestPendingResponse { substream, request }
                     }
-                    Poll::Ready(Some(Err(_))) => {
+                    Poll::Ready(Some(Err(e))) => {
                         let delay_key = &entry.get().delay_key;
                         self.outbound_substreams_delay.remove(delay_key);
-                        let outbound_err = "Outbound Error";
+                        let outbound_err = "Stream dropped";
                         entry.remove_entry();
                         return Poll::Ready(ConnectionHandlerEvent::Custom(Err(outbound_err)));
                     }
