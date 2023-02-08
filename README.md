@@ -12,4 +12,4 @@ It is based on the [lighthouse](https://github.com/sigp/lighthouse) client beaco
 
 ## Issues
 
-Established connections are being dropped due to the [Req/Res domain](https://github.com/ethereum/consensus-specs/blob/dev/specs/phase0/p2p-interface.md#the-reqresp-domain) not being implemented. This leads to a bad peer score and eventual disconnection. Working on implementing it.
+Although it's possible to currently receive blocks, connections are still hard to maintain, so a peer manager has to be implemented to keep the connected peers amount stable.
