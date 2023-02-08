@@ -17,6 +17,7 @@ use std::task::{Context, Poll};
 pub trait ReqId: Send + 'static + std::fmt::Debug + Copy + Clone {}
 impl<T> ReqId for T where T: Send + 'static + std::fmt::Debug + Copy + Clone {}
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum RPCSend<Id> {
     Request(Id, OutboundRequest),
@@ -58,15 +59,13 @@ impl<Id: ReqId> RPC<Id> {
         });
     }
 
-    pub fn send_request(&mut self, peer_id: PeerId, request_id: Id, event: OutboundRequest) {
+    pub fn _send_request(&mut self, peer_id: PeerId, request_id: Id, event: OutboundRequest) {
         self.events.push(NetworkBehaviourAction::NotifyHandler {
             peer_id,
             handler: NotifyHandler::Any,
             event: RPCSend::Request(request_id, event),
         });
     }
-
-    pub fn shutdown(&mut self, peer_id: PeerId, id: Id) {}
 }
 
 impl<Id> NetworkBehaviour for RPC<Id>
@@ -108,12 +107,14 @@ where
 
 // API
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestId<AppReqId> {
     Application(AppReqId),
     Internal,
 }
 
+#[allow(dead_code)]
 #[derive(PartialEq)]
 pub enum Request {
     Status(StatusMessage),
@@ -127,6 +128,7 @@ impl std::convert::From<Request> for OutboundRequest {
     }
 }
 
+#[allow(dead_code)]
 #[derive(PartialEq)]
 pub enum Response {
     Status(StatusMessage),

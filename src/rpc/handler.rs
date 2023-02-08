@@ -37,6 +37,7 @@ pub struct SubstreamId(usize);
 
 // Inbound
 
+#[allow(dead_code)]
 struct InboundInfo {
     state: InboundState,
     pending_items: VecDeque<RPCCodedResponse>,
@@ -379,7 +380,7 @@ where
                         }
                     }
                 }
-                Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(_))) => {
                     return Poll::Ready(ConnectionHandlerEvent::Close(RPCError::Error));
                 }
                 Poll::Pending | Poll::Ready(None) => break,
@@ -402,7 +403,7 @@ where
                         println!("timed out substream not in the books");
                     }
                 }
-                Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(_))) => {
                     println!("Outbound substream poll failed");
                     return Poll::Ready(ConnectionHandlerEvent::Close(RPCError::Error));
                 }
@@ -412,7 +413,7 @@ where
 
         let deactivated = matches!(self.state, HandlerState::Deactivated);
 
-        let mut substreams_to_remove = Vec::new(); // Closed substreams that need to be removed
+        let mut substreams_to_remove = Vec::new();
         for (id, info) in self.inbound_substreams.iter_mut() {
             loop {
                 match std::mem::replace(&mut info.state, InboundState::Poisoned) {
@@ -557,7 +558,7 @@ where
                         }
 
                         let id = entry.get().req_id;
-                        let proto = entry.get().proto;
+                        let _proto = entry.get().proto;
 
                         let received = match response {
                             RPCCodedResponse::Success(resp) => Ok(RPCReceived::Response(id, resp)),
@@ -568,7 +569,7 @@ where
                     }
                     Poll::Ready(None) => {
                         let delay_key = &entry.get().delay_key;
-                        let request_id = entry.get().req_id;
+                        let _request_id = entry.get().req_id;
                         self.outbound_substreams_delay.remove(delay_key);
                         entry.remove_entry();
 
@@ -579,7 +580,7 @@ where
                         entry.get_mut().state =
                             OutboundSubstreamState::RequestPendingResponse { substream, request }
                     }
-                    Poll::Ready(Some(Err(e))) => {
+                    Poll::Ready(Some(Err(_))) => {
                         let delay_key = &entry.get().delay_key;
                         self.outbound_substreams_delay.remove(delay_key);
                         let outbound_err = "Stream dropped";

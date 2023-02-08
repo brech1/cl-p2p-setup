@@ -35,6 +35,7 @@ const TTFB_TIMEOUT: u64 = 5;
 const REQUEST_TIMEOUT: u64 = 15;
 
 // Req/Resp Domain protocols
+#[allow(dead_code)]
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -87,7 +88,7 @@ pub struct ProtocolId {
 }
 
 impl ProtocolId {
-    pub fn rpc_request_limits(&self) -> RpcLimits {
+    pub fn _rpc_request_limits(&self) -> RpcLimits {
         match self.message_name {
             // BlocksByRange, BlocksByRoot, Goodbye not impl
             Protocol::Status => RpcLimits::new(
@@ -120,7 +121,7 @@ impl ProtocolId {
         }
     }
 
-    pub fn has_context_bytes(&self) -> bool {
+    pub fn _has_context_bytes(&self) -> bool {
         match self.message_name {
             Protocol::BlocksByRange | Protocol::BlocksByRoot => true,
             _ => false,
@@ -188,6 +189,7 @@ impl UpgradeInfo for RPCProtocol {
 
 // Inbound
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboundRequest {
     Status(StatusMessage),
@@ -285,6 +287,7 @@ impl UpgradeInfo for OutboundRequestContainer {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutboundRequest {
     Status(StatusMessage),

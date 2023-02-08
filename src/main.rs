@@ -21,7 +21,9 @@ mod config;
 mod discovery;
 mod enr;
 mod rpc;
-use crate::rpc::methods::{MetaData, RPCCodedResponse, RPCResponse};
+use crate::rpc::methods::{
+    EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,21 +140,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         }
                     },
-                    BehaviourEvent::Rpc(rpc_message) => match rpc_message.event {
-                        Ok(received) => match received{
+                    BehaviourEvent::Rpc(rpc_message) =>{
+                        println!("RPC message: {:#?}", rpc_message);
+                        match rpc_message.event {
+                        Ok(received) => match received {
                         rpc::RPCReceived::Request(substream, inbound_req) => {
                             println!("RPC Request: {:#?}", inbound_req);
                             match inbound_req {
                                 InboundRequest::Status(status)=>{
                                     swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Status(status)));
                                 },
-                                InboundRequest::Ping(ping) => {
-                                    println!("Ping: {:#?}", ping);
-                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Pong(ping)));
+                                InboundRequest::Ping(_) => {
+                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Pong(rpc::methods::Ping {
+                                        data: 0,
+                                    })));
                                 },
                                 InboundRequest::MetaData => {
                                     swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::MetaData(MetaData{
                                         seq_number: 0,
+                                        attnets: EnrAttestationBitfield::default(),
+                                        syncnets: EnrSyncCommitteeBitfield::default(),
                                     })));
                                 },
                                 _ => {
@@ -162,8 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
-                        Err(_) =>   todo!(),
-                    }
+                        Err(e) =>  println!("{}", e),
+                    }}
                 },
                 SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
