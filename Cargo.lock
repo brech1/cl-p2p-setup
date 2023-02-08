@@ -656,16 +656,21 @@ dependencies = [
  "eth2_ssz_derive",
  "eth2_ssz_types",
  "ethereum-types 0.14.1",
+ "fnv",
  "futures",
  "libp2p",
  "primitive-types 0.12.1",
  "serde",
  "serde_derive",
  "sha2 0.10.6",
+ "smallvec",
  "snap",
  "tokio",
+ "tokio-io-timeout",
+ "tokio-util 0.6.10",
  "tree_hash",
  "tree_hash_derive",
+ "unsigned-varint",
 ]
 
 [[package]]
@@ -4481,6 +4486,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30b74022ada614a1b4834de765f9bb43877f910cc8ce4be40e89042c9223a8bf"
+dependencies = [
+ "pin-project-lite 0.2.9",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4510,6 +4525,7 @@ checksum = "36943ee01a6d67977dd3f84a5a1d2efeb4ada3a1ae771cadfaa535d9d9fc6507"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "log",
  "pin-project-lite 0.2.9",
@@ -4755,6 +4771,7 @@ dependencies = [
  "bytes",
  "futures-io",
  "futures-util",
+ "tokio-util 0.6.10",
 ]
 
 [[package]]

@@ -1,5 +1,7 @@
 use crate::config::{DUPLICATE_CACHE_TIME, GOSSIP_MAX_SIZE_BELLATRIX};
 use crate::discovery::Discovery;
+use crate::rpc::protocol::InboundRequest;
+use crate::rpc::{ReqId, RequestId, RPC};
 use libp2p::futures::StreamExt;
 use libp2p::gossipsub::subscription_filter::AllowAllSubscriptionFilter;
 use libp2p::gossipsub::{
@@ -18,6 +20,10 @@ mod chain;
 mod config;
 mod discovery;
 mod enr;
+mod rpc;
+use crate::rpc::methods::{
+    EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -86,17 +92,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
 
+    let rpc: RPC<RequestId<()>> = RPC::new();
+
     // We create a custom network behaviour that combines Gossipsub and Discv5.
     #[derive(NetworkBehaviour)]
-    struct Behaviour {
+    struct Behaviour<AppReqId: ReqId> {
         gossipsub: Gossipsub<SnappyTransform, AllowAllSubscriptionFilter>,
         discovery: Discovery,
+        rpc: RPC<RequestId<AppReqId>>,
     }
 
     let behaviour = {
         Behaviour {
             gossipsub,
             discovery,
+            rpc,
         }
     };
 
@@ -120,12 +130,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
-                    BehaviourEvent::Gossipsub(ev) => println!("Gossipsub: {ev:?}"),
+                    BehaviourEvent::Gossipsub(gs) =>
+                    match gs {
+                        gossipsub::GossipsubEvent::Message { propagation_source: _, message_id: _, message } => println!("Gossipsub Message: {:#?}", message),
+                        _ => ()
+                    },
                     BehaviourEvent::Discovery(discovered) => {
                         for (peer_id, _multiaddr) in discovered.peers {
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         }
                     },
+                    BehaviourEvent::Rpc(rpc_message) =>{
+                        println!("RPC message: {:#?}", rpc_message);
+                        match rpc_message.event {
+                        Ok(received) => match received {
+                        rpc::RPCReceived::Request(substream, inbound_req) => {
+                            println!("RPC Request: {:#?}", inbound_req);
+                            match inbound_req {
+                                InboundRequest::Status(status)=>{
+                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Status(status)));
+                                },
+                                InboundRequest::Ping(_) => {
+                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Pong(rpc::methods::Ping {
+                                        data: 0,
+                                    })));
+                                },
+                                InboundRequest::MetaData => {
+                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::MetaData(MetaData{
+                                        seq_number: 0,
+                                        attnets: EnrAttestationBitfield::default(),
+                                        syncnets: EnrSyncCommitteeBitfield::default(),
+                                    })));
+                                },
+                                _ => {
+                                    swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Error);
+                                },
+                            }
+                        },
+                        rpc::RPCReceived::Response(_, _) => todo!(),
+                        },
+                        Err(e) =>  println!("{}", e),
+                    }}
                 },
                 SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
