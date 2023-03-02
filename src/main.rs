@@ -10,7 +10,8 @@ use libp2p::gossipsub::{
 };
 use libp2p::swarm::{ConnectionLimits, NetworkBehaviour, SwarmBuilder, SwarmEvent};
 use libp2p::{
-    core, dns, gossipsub, identity, mplex, noise, tcp, websocket, yamux, PeerId, Transport,
+    core, dns, gossipsub, identify, identity, mplex, noise, tcp, websocket, yamux, PeerId,
+    Transport,
 };
 use sha2::{Digest, Sha256};
 use snap::raw::{decompress_len, Decoder, Encoder};
@@ -92,6 +93,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // subscribes to our topic
     gossipsub.subscribe(&topic)?;
 
+    let identify = identify::Behaviour::new(
+        identify::Config::new("".into(), local_key.public()).with_cache_size(0),
+    );
+
     let rpc: RPC<RequestId<()>> = RPC::new();
 
     // We create a custom network behaviour that combines Gossipsub and Discv5.
@@ -100,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gossipsub: Gossipsub<SnappyTransform, AllowAllSubscriptionFilter>,
         discovery: Discovery,
         rpc: RPC<RequestId<AppReqId>>,
+        identify: identify::Behaviour,
     }
 
     let behaviour = {
@@ -107,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             gossipsub,
             discovery,
             rpc,
+            identify,
         }
     };
 
@@ -170,7 +177,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
                         Err(e) =>  println!("{}", e),
-                    }}
+                    }},
+                    BehaviourEvent::Identify(ev) => println!("identify: {:#?}", ev),
                 },
                 SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
