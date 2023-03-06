@@ -1,4 +1,4 @@
-use crate::config::BOOTNODE;
+use crate::config::BOOTNODES;
 use crate::enr::{build_enr, EnrAsPeerId, EnrForkId};
 use discv5::enr::NodeId;
 use discv5::{enr::CombinedKey, Discv5, Discv5ConfigBuilder, Discv5Event, Enr};
@@ -9,6 +9,7 @@ use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
+use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -65,8 +66,10 @@ impl Discovery {
         let mut discv5 = Discv5::new(local_enr.clone(), enr_key, config).unwrap();
 
         // Add bootnode
-        let ef_bootnode_enr = Enr::from_str(BOOTNODE).unwrap();
-        discv5.add_enr(ef_bootnode_enr).expect("bootnode error");
+        for bootnode in BOOTNODES {
+            let ef_bootnode_enr = Enr::from_str(bootnode).unwrap();
+            discv5.add_enr(ef_bootnode_enr).expect("bootnode error");
+        }
 
         // Start the discv5 service
         discv5.start(listen_socket).await.unwrap();
@@ -111,6 +114,15 @@ impl Discovery {
                 let mut peers: HashMap<PeerId, Option<Instant>> = HashMap::new();
 
                 for peer_enr in res.unwrap() {
+                    match self.discv5.add_enr(peer_enr.clone()) {
+                        Ok(_) => {
+                            debug!("Added peer: {:?} to discv5", peer_enr.node_id());
+                        }
+                        Err(_) => {
+                            warn!("Failed to add peer: {:?} to discv5", peer_enr.node_id());
+
+                        }
+                    };
                     let peer_id = peer_enr.clone().as_peer_id();
 
                     if peer_enr.ip4().is_some() && peer_enr.tcp4().is_some() {

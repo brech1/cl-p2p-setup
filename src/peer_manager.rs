@@ -1,11 +1,11 @@
 use libp2p::{
+    identify::IdentifyInfo,
     swarm::{
         behaviour::{ConnectionClosed, ConnectionEstablished, DialFailure, FromSwarm},
         dummy::ConnectionHandler,
         NetworkBehaviour, NetworkBehaviourAction, PollParameters,
     },
     PeerId,
-    identify::IdentifyInfo
 };
 use std::collections::{HashMap, HashSet};
 use std::task::{Context, Poll};
@@ -15,7 +15,7 @@ use log::{debug, error, info, trace, warn};
 
 pub struct PeerManager {
     connected_peers: HashSet<PeerId>,
-    dialing_peers: HashSet<PeerId>,
+    dialling_peers: HashSet<PeerId>,
     new_peers: HashSet<PeerId>,
     peer_data: HashMap<PeerId, PeerData>,
     peer_identities: HashMap<PeerId, IdentifyInfo>,
@@ -60,15 +60,16 @@ pub struct ConnectionData {
     pub connection_status: ConnectionStatus,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ConnectionStatus {
     Connecting,
     Connected,
     Disconnected,
     Failed,
+    Timeout,
 }
 
-const HEARTBEAT_INTERVAL: u64 = 1;
+const DIAL_TIMEOUT: u64 = 5;
 
 impl NetworkBehaviour for PeerManager {
     type ConnectionHandler = ConnectionHandler;
@@ -80,19 +81,23 @@ impl NetworkBehaviour for PeerManager {
         cx: &mut Context<'_>,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-        // perform the heartbeat when necessary
-        if !self.waiting_for_peer_discovery && self.peers_to_discover > 0 {
-            let ev = Poll::Ready(NetworkBehaviourAction::GenerateEvent(
-                PeerManagerEvent::DiscoverPeers(self.peers_to_discover),
-            ));
-            self.peers_to_discover = 0;
-            self.waiting_for_peer_discovery = true;
-            return ev;
-        }
         while self.heartbeat.poll_tick(cx).is_ready() {
+            self.timeout_dialling_peers();
+        }
+
+        // perform the heartbeat when necessary
+        if !self.waiting_for_peer_discovery {
+            if self.peers_to_discover > 0 {
+                let ev = Poll::Ready(NetworkBehaviourAction::GenerateEvent(
+                    PeerManagerEvent::DiscoverPeers(self.peers_to_discover),
+                ));
+                self.peers_to_discover = 0;
+                self.waiting_for_peer_discovery = true;
+                return ev;
+            }
             let missing_peers =
-                self.target_peer_number - self.connected_and_dialing_peers().len() as u32;
-            if missing_peers > 0 {
+                self.target_peer_number - self.connected_and_dialling_peers().len() as u32;
+            if missing_peers > self.peers_to_discover / 4 {
                 let peers_to_dial = self.get_peers_to_dial(missing_peers);
                 self.peers_to_discover = missing_peers - peers_to_dial.len() as u32;
 
@@ -143,11 +148,11 @@ impl NetworkBehaviour for PeerManager {
 impl PeerManager {
     pub fn new(target_peer_number: u32) -> Self {
         // Set up the peer manager heartbeat interval
-        let heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(HEARTBEAT_INTERVAL));
+        let heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(DIAL_TIMEOUT));
         Self {
             new_peers: HashSet::new(),
             connected_peers: HashSet::new(),
-            dialing_peers: HashSet::new(),
+            dialling_peers: HashSet::new(),
             peer_data: HashMap::new(),
             peer_identities: HashMap::new(),
             peers_to_discover: 0,
@@ -157,8 +162,30 @@ impl PeerManager {
         }
     }
 
-    pub fn get_peer_data(&self) -> &HashMap<PeerId, PeerData> {
-        &self.peer_data
+    fn timeout_dialling_peers(&mut self) {
+        let now = Instant::now();
+        let mut timed_out_peers = Vec::new();
+        for peer_id in self.dialling_peers.iter() {
+            if let Some(peer_data) = self.peer_data.get_mut(peer_id) {
+                if let Some(connection_data) = peer_data.connection_history.last_mut() {
+                    if connection_data.connection_status == ConnectionStatus::Connecting
+                        && now.duration_since(connection_data.dial_timestamp).as_secs()
+                            > DIAL_TIMEOUT
+                    {
+                        connection_data.connection_status = ConnectionStatus::Timeout;
+                        connection_data.failure_timestamp = Some(now);
+                        timed_out_peers.push(*peer_id);
+                    }
+                } else {
+                    timed_out_peers.push(*peer_id);
+                }
+            } else {
+                timed_out_peers.push(*peer_id);
+            }
+        }
+        for peer_id in timed_out_peers {
+            self.dialling_peers.remove(&peer_id);
+        }
     }
 
     fn get_peers_to_dial(&mut self, missing_peers: u32) -> Vec<PeerId> {
@@ -167,24 +194,24 @@ impl PeerManager {
 
         let new_peers_to_dial = missing_peers - peers_to_dial.len() as u32;
         if new_peers_to_dial > 0 {
-            peers_to_dial.append(&mut self.get_new_peers_for_dialing(new_peers_to_dial));
+            peers_to_dial.append(&mut self.get_new_peers_for_dialling(new_peers_to_dial));
         }
 
         for peer in peers_to_dial.iter() {
-            self.dialing_peers.insert(*peer);
+            self.dialling_peers.insert(*peer);
+            self.peer_connecting(*peer);
         }
 
         peers_to_dial
     }
 
-    fn get_new_peers_for_dialing(&mut self, missing_peers: u32) -> Vec<PeerId> {
+    fn get_new_peers_for_dialling(&mut self, missing_peers: u32) -> Vec<PeerId> {
         let mut peers_to_dial = Vec::new();
         for peer_id in self.new_peers.clone().iter() {
             if peers_to_dial.len() == missing_peers as usize {
                 break;
             }
             peers_to_dial.push(peer_id.clone());
-            self.peer_connecting(peer_id.clone());
         }
         peers_to_dial
     }
@@ -210,6 +237,7 @@ impl PeerManager {
     }
 
     fn on_connection_established(&mut self, peer_id: PeerId) {
+        info!("Connection established with peer {}", peer_id);
         let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
         let mut connection_data = peer_data
             .connection_history
@@ -219,10 +247,11 @@ impl PeerManager {
         connection_data.connection_status = ConnectionStatus::Connected;
 
         self.connected_peers.insert(peer_id);
-        self.dialing_peers.remove(&peer_id);
+        self.dialling_peers.remove(&peer_id);
     }
 
     fn on_connection_closed(&mut self, peer_id: PeerId) {
+        info!("Connection closed with peer {}", peer_id);
         let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
         let mut connection_data = peer_data
             .connection_history
@@ -235,6 +264,7 @@ impl PeerManager {
     }
 
     fn on_dial_failure(&mut self, peer_id: Option<PeerId>) {
+        info!("Dialling failed for peer: {:?}", peer_id);
         if let Some(peer_id) = peer_id {
             let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
             let mut connection_data = peer_data
@@ -244,7 +274,7 @@ impl PeerManager {
             connection_data.connection_status = ConnectionStatus::Failed;
             connection_data.failure_timestamp = Some(Instant::now());
             PeerManager::update_average_connection_duration(peer_data);
-            self.dialing_peers.remove(&peer_id);
+            self.dialling_peers.remove(&peer_id);
         }
     }
 
@@ -287,10 +317,15 @@ impl PeerManager {
         }
     }
 
-    fn connected_and_dialing_peers(&self) -> HashSet<PeerId> {
-        let mut connected_and_dialing_peers = self.connected_peers.clone();
-        connected_and_dialing_peers.extend(self.dialing_peers.clone());
-        connected_and_dialing_peers
+    fn connected_and_dialling_peers(&self) -> HashSet<PeerId> {
+        let mut connected_and_dialling_peers = self.connected_peers.clone();
+        info!("Connected peers: {:?}", connected_and_dialling_peers.len());
+        connected_and_dialling_peers.extend(self.dialling_peers.clone());
+        info!(
+            "Connected and dialling peers: {:?}",
+            connected_and_dialling_peers.len()
+        );
+        connected_and_dialling_peers
     }
 
     fn get_best_peers_for_redial(&self, num_peers: u32) -> Vec<PeerId> {
@@ -340,7 +375,8 @@ impl PeerManager {
     }
 
     pub fn log_metrics(&self) {
-        let mut number_and_average_time_by_peer = self.peer_data
+        let mut number_and_average_time_by_peer = self
+            .peer_data
             .iter()
             .map(|(peer_id, peer_data)| {
                 let num_connections = peer_data.connection_history.len();
@@ -365,6 +401,6 @@ impl PeerManager {
         );
 
         info!("Connected peers: {:#?}", self.connected_peers);
-        info!("Dialing Peers: {:#?}", self.dialing_peers);
+        info!("dialling Peers: {:#?}", self.dialling_peers);
     }
 }

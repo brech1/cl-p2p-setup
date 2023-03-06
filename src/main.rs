@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
 
-    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 1);
+    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 3);
     // Run
     while std::time::Instant::now() < time_to_stop {
         tokio::select! {
