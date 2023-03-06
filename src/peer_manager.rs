@@ -5,16 +5,20 @@ use libp2p::{
         NetworkBehaviour, NetworkBehaviourAction, PollParameters,
     },
     PeerId,
+    identify::IdentifyInfo
 };
 use std::collections::{HashMap, HashSet};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+
+use log::{debug, error, info, trace, warn};
 
 pub struct PeerManager {
     connected_peers: HashSet<PeerId>,
     dialing_peers: HashSet<PeerId>,
     new_peers: HashSet<PeerId>,
     peer_data: HashMap<PeerId, PeerData>,
+    peer_identities: HashMap<PeerId, IdentifyInfo>,
     target_peer_number: u32,
     peers_to_discover: u32,
     /// The heartbeat interval to perform routine maintenance.
@@ -32,16 +36,14 @@ pub enum PeerManagerEvent {
 
 #[derive(Debug)]
 pub struct PeerData {
-    connection_history: Vec<ConnectionData>,
-    connection_status: ConnectionStatus,
-    average_connection_duration: Option<usize>,
+    pub connection_history: Vec<ConnectionData>,
+    pub average_connection_duration: Option<usize>,
 }
 
 impl PeerData {
     pub fn new() -> Self {
         Self {
             connection_history: Vec::new(),
-            connection_status: ConnectionStatus::New,
             average_connection_duration: None,
         }
     }
@@ -51,14 +53,15 @@ const MIN_AVERAGE_CONNECTION_DURATION: usize = 5000;
 
 #[derive(Debug)]
 pub struct ConnectionData {
-    established_timestamp: Option<Instant>,
-    failure_timestamp: Option<Instant>,
-    disconnect_timestamp: Option<Instant>,
+    pub established_timestamp: Option<Instant>,
+    pub failure_timestamp: Option<Instant>,
+    pub disconnect_timestamp: Option<Instant>,
+    pub dial_timestamp: Instant,
+    pub connection_status: ConnectionStatus,
 }
 
 #[derive(Debug)]
 pub enum ConnectionStatus {
-    New,
     Connecting,
     Connected,
     Disconnected,
@@ -146,11 +149,16 @@ impl PeerManager {
             connected_peers: HashSet::new(),
             dialing_peers: HashSet::new(),
             peer_data: HashMap::new(),
+            peer_identities: HashMap::new(),
             peers_to_discover: 0,
             target_peer_number,
             heartbeat,
             waiting_for_peer_discovery: false,
         }
+    }
+
+    pub fn get_peer_data(&self) -> &HashMap<PeerId, PeerData> {
+        &self.peer_data
     }
 
     fn get_peers_to_dial(&mut self, missing_peers: u32) -> Vec<PeerId> {
@@ -191,35 +199,37 @@ impl PeerManager {
 
     fn peer_connecting(&mut self, peer_id: PeerId) {
         let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
-        peer_data.connection_status = ConnectionStatus::Connecting;
         peer_data.connection_history.push(ConnectionData {
             established_timestamp: None,
             failure_timestamp: None,
             disconnect_timestamp: None,
+            connection_status: ConnectionStatus::Connecting,
+            dial_timestamp: Instant::now(),
         });
         self.new_peers.remove(&peer_id);
     }
 
     fn on_connection_established(&mut self, peer_id: PeerId) {
         let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
-        peer_data.connection_status = ConnectionStatus::Connected;
-        peer_data.connection_history.push(ConnectionData {
-            established_timestamp: Some(Instant::now()),
-            failure_timestamp: None,
-            disconnect_timestamp: None,
-        });
+        let mut connection_data = peer_data
+            .connection_history
+            .last_mut()
+            .expect("Missing connectio_data entry for established peer");
+        connection_data.established_timestamp = Some(Instant::now());
+        connection_data.connection_status = ConnectionStatus::Connected;
+
         self.connected_peers.insert(peer_id);
         self.dialing_peers.remove(&peer_id);
     }
 
     fn on_connection_closed(&mut self, peer_id: PeerId) {
         let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
-        peer_data.connection_status = ConnectionStatus::Disconnected;
-        peer_data
+        let mut connection_data = peer_data
             .connection_history
             .last_mut()
-            .unwrap()
-            .disconnect_timestamp = Some(Instant::now());
+            .expect("Missing connectio_data entry for established peer");
+        connection_data.connection_status = ConnectionStatus::Disconnected;
+        connection_data.disconnect_timestamp = Some(Instant::now());
         PeerManager::update_average_connection_duration(peer_data);
         self.connected_peers.remove(&peer_id);
     }
@@ -227,25 +237,27 @@ impl PeerManager {
     fn on_dial_failure(&mut self, peer_id: Option<PeerId>) {
         if let Some(peer_id) = peer_id {
             let peer_data = self.peer_data.get_mut(&peer_id).unwrap();
-            peer_data.connection_status = ConnectionStatus::Failed;
-            peer_data.connection_history.push(ConnectionData {
-                established_timestamp: None,
-                failure_timestamp: Some(Instant::now()),
-                disconnect_timestamp: None,
-            });
+            let mut connection_data = peer_data
+                .connection_history
+                .last_mut()
+                .expect("Missing connectio_data entry for established peer");
+            connection_data.connection_status = ConnectionStatus::Failed;
+            connection_data.failure_timestamp = Some(Instant::now());
             PeerManager::update_average_connection_duration(peer_data);
             self.dialing_peers.remove(&peer_id);
         }
     }
 
     fn update_average_connection_duration(peer_data: &mut PeerData) {
-        println!("Updating average connection duration: {:?}", peer_data);
         let num_connection_attempts = peer_data.connection_history.len();
-        let new_duration = match peer_data.connection_status {
+        let connection_data = peer_data
+            .connection_history
+            .last()
+            .expect("Missing connection_data entry when updating average connection");
+        let new_duration = match connection_data.connection_status {
             ConnectionStatus::Failed => Duration::from_secs(0),
             ConnectionStatus::Disconnected => {
-                let connection_data = peer_data.connection_history.last().unwrap();
-                if let Some(disconnected_timestamp ) = connection_data.disconnect_timestamp {
+                if let Some(disconnected_timestamp) = connection_data.disconnect_timestamp {
                     if let Some(established_timestamp) = connection_data.established_timestamp {
                         disconnected_timestamp - established_timestamp
                     } else {
@@ -259,6 +271,11 @@ impl PeerManager {
                 "Connection status should be either failed or disconnected when updating score"
             ),
         };
+
+        info!(
+            "Updating average connection duration withs status {:?} with new duration {:?}",
+            connection_data.connection_status, new_duration
+        );
 
         if let Some(old_average) = peer_data.average_connection_duration {
             peer_data.average_connection_duration = Some(
@@ -282,9 +299,12 @@ impl PeerManager {
         let mut peer_data: Vec<(PeerId, &PeerData)> = self
             .peer_data
             .iter()
-            .filter(|(_, peer_data)| match peer_data.connection_status {
-                ConnectionStatus::Failed => true,
-                ConnectionStatus::Disconnected => true,
+            .filter(|(_, peer_data)| match peer_data.connection_history.last() {
+                Some(connection_data) => match connection_data.connection_status {
+                    ConnectionStatus::Failed => true,
+                    ConnectionStatus::Disconnected => true,
+                    _ => false,
+                },
                 _ => false,
             })
             .filter(|(_, peer_data)| {
@@ -309,5 +329,42 @@ impl PeerManager {
             return score;
         }
         0
+    }
+
+    pub fn add_peer_identity(&mut self, peer_id: PeerId, identity: IdentifyInfo) {
+        self.peer_identities.insert(peer_id, identity);
+    }
+
+    pub fn log_identities(&self) {
+        info!("Peer identities: {:#?}", self.peer_identities);
+    }
+
+    pub fn log_metrics(&self) {
+        let mut number_and_average_time_by_peer = self.peer_data
+            .iter()
+            .map(|(peer_id, peer_data)| {
+                let num_connections = peer_data.connection_history.len();
+                let average_connection_duration =
+                    peer_data.average_connection_duration.unwrap_or(0);
+                let connection_status = match peer_data.connection_history.last() {
+                    Some(connection_data) => Some(&connection_data.connection_status),
+                    None => None,
+                };
+                (
+                    peer_id,
+                    num_connections,
+                    Duration::from_millis(average_connection_duration as u64),
+                    connection_status,
+                )
+            })
+            .collect::<Vec<_>>();
+        number_and_average_time_by_peer.sort_by(|(_, _, a, _), (_, _, b, _)| b.cmp(a));
+        info!(
+            "Number and average time by peer: {:#?}",
+            number_and_average_time_by_peer
+        );
+
+        info!("Connected peers: {:#?}", self.connected_peers);
+        info!("Dialing Peers: {:#?}", self.dialing_peers);
     }
 }

@@ -660,6 +660,7 @@ dependencies = [
  "fnv",
  "futures",
  "libp2p",
+ "log",
  "primitive-types 0.12.1",
  "serde",
  "serde_derive",

@@ -14,6 +14,7 @@ use libp2p::{
     core, dns, gossipsub, identify, identity, mplex, noise, tcp, websocket, yamux, PeerId,
     Transport,
 };
+use log::{debug, error, info, trace, warn};
 use sha2::{Digest, Sha256};
 use snap::raw::{decompress_len, Decoder, Encoder};
 use std::io::{Error, ErrorKind};
@@ -36,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let local_key = identity::Keypair::generate_secp256k1();
     let local_peer_id = PeerId::from(local_key.public());
 
-    println!("Local peer id: {local_peer_id}");
+    info!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the Mplex protocol.
     let transport = build_transport(&local_key)?;
@@ -141,28 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
-    #[derive(Debug)]
-    enum ConnectionEvent {
-        Connected,
-        Disconnected(Option<String>),
-    }
-    // Map to keep track of connections
-    #[derive(Debug)]
-    struct TimedConnectionEvent {
-        peer_id: PeerId,
-        /// Endpoint of the connection that has been closed.
-        endpoint: String,
-        /// Number of other remaining connections to this same peer.
-        num_established: u32,
-        event: ConnectionEvent,
-        time: std::time::Instant,
-    }
-
-    let mut connection_events: Vec<TimedConnectionEvent> = Vec::new();
-    let mut peer_identities = HashMap::new();
-    let mut peer_connection_times = HashMap::new();
-    let mut redialable_peers = HashSet::new();
-    let MIN_CONNECTION_DURATION_FOR_RETRY = Duration::from_secs(2);
 
     let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 1);
     // Run
@@ -172,19 +151,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
                     BehaviourEvent::Gossipsub(gs) =>
                     match gs {
-                        gossipsub::GossipsubEvent::Message { propagation_source: _, message_id: _, message } => println!("Gossipsub Message: {:#?}", message),
+                        gossipsub::GossipsubEvent::Message { propagation_source: _, message_id: _, message } => debug!("Gossipsub Message: {:#?}", message),
                         _ => ()
                     },
                     BehaviourEvent::Discovery(discovered) => {
-                        println!("Discovery Event: {:#?}", &discovered);
+                        debug!("Discovery Event: {:#?}", &discovered);
                             swarm.behaviour_mut().peer_manager.add_peers(discovered.peers.into_iter().map(|(peer_id, _)| peer_id).collect());
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
-                        println!("RPC message: {:#?}", rpc_message);
+                        debug!("RPC message: {:#?}", rpc_message);
                         match rpc_message.event {
                         Ok(received) => match received {
                         rpc::RPCReceived::Request(substream, inbound_req) => {
-                            println!("RPC Request: {:#?}", inbound_req);
+                            debug!("RPC Request: {:#?}", inbound_req);
                             match inbound_req {
                                 InboundRequest::Status(status)=>{
                                     swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Status(status)));
@@ -208,19 +187,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
-                        Err(e) =>  println!("Error in RPC quest handling: {}", e),
+                        Err(e) =>  warn!("Error in RPC quest handling: {}", e),
                     }},
                     BehaviourEvent::Identify(ev) => {
-                        println!("identify: {:#?}", ev);
+                        debug!("identify: {:#?}", ev);
                         match ev {
                             identify::IdentifyEvent::Received { peer_id, info, .. } => {
-                                peer_identities.insert(peer_id, info);
+                                swarm.behaviour_mut().peer_manager.add_peer_identity(peer_id, info);
                             }
                             _ => {}
                         }
                     },
                     BehaviourEvent::PeerManager(ev) => {
-                        println!("PeerManager event: {:#?}", ev);
+                        debug!("PeerManager event: {:#?}", ev);
                         match ev {
                             peer_manager::PeerManagerEvent::DiscoverPeers(num_peers) => {
                                 swarm.behaviour_mut().discovery.set_peers_to_discover(num_peers as usize);
@@ -234,140 +213,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 },
                 SwarmEvent::ConnectionClosed { peer_id, endpoint, num_established, cause } => {
-                    println!("ConnectionClosed: Cause {cause:?} - PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
-                    connection_events.push(TimedConnectionEvent {
-                        peer_id,
-                        endpoint: format!("{:?}", endpoint),
-                        num_established,
-                        event: ConnectionEvent::Disconnected(
-                            cause.map(|e| e.to_string())
-                        ),
-                        time: std::time::Instant::now(),
-                    });
-                    // match swarm.dial(peer_id) {
-                    //     Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
-                    //     Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
-                    // }
-
-                        let last_connection_time = peer_connection_times.get(&peer_id);
-                        match last_connection_time {
-                            Some(last_connection_time) => {
-                                let time_since_last_connection = std::time::Instant::now() - *last_connection_time;
-                                if time_since_last_connection > MIN_CONNECTION_DURATION_FOR_RETRY {
-                                    println!("Peer {:?} was connected for {:?} - Registering for redialing", peer_id, time_since_last_connection);
-                                    redialable_peers.insert(peer_id);
-                                }
-                            },
-                            None => {
-                                println!("Peer {:?} was never connected - not Re-Dialing peer", peer_id);
-                            }
-                        }
-                        if redialable_peers.contains(&peer_id) {
-                            match swarm.dial(peer_id) {
-                                Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
-                                Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
-                            }
-                        }
-
-
-
+                    debug!("ConnectionClosed: Cause {cause:?} - PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
-                    println!("ConnectionEstablished: PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
-                    connection_events.push(TimedConnectionEvent {
-                            peer_id,
-                            endpoint: format!("{:?}", endpoint),
-                            num_established: num_established.into(),
-                        event: ConnectionEvent::Connected,
-                        time: std::time::Instant::now(),
-                    });
-                    peer_connection_times.insert(peer_id, std::time::Instant::now());
+                    debug!("ConnectionEstablished: PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
                 },
-                SwarmEvent::OutgoingConnectionError { peer_id, error } => {
-                    println!("OutgoingConnectionError for peer_id: {peer_id:?} : {error:?}");
-                    if let Some(peer_id) = peer_id {
-                    if redialable_peers.contains(&peer_id) {
-                        match swarm.dial(peer_id) {
-                            Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
-                            Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
-                        }
-                    }
-                    }
-                },
-                _ => println!("Swarm: {event:?}"),
+                _ => debug!("Swarm: {event:?}"),
             },
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                println!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
+                info!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
             }
         }
     }
 
-    let connection_events_by_peer_ids =
-        connection_events
-            .iter()
-            .fold(HashMap::new(), |mut acc, event| {
-                let peer_id = event.peer_id;
-                let events = acc.entry(peer_id).or_insert_with(Vec::new);
-                events.push(event);
-                acc
-            });
-    let mut connected_peers = HashSet::new();
-    let connection_durations_by_peer = connection_events_by_peer_ids
-        .into_iter()
-        .map(|(peer_id, events)| {
-            let mut connected = None;
-            let mut durations = Vec::new();
-            for event in events {
-                match event.event {
-                    ConnectionEvent::Connected => {
-                        connected = Some(event.time);
-                    }
-                    ConnectionEvent::Disconnected(_) => {
-                        if let Some(connected) = connected {
-                            durations.push(event.time - connected);
-                        }
-                        connected = None;
-                    }
-                }
-            }
-            if let Some(connected) = connected {
-                durations.push(std::time::Instant::now() - connected);
-                connected_peers.insert(peer_id);
-            }
-            (peer_id, durations)
-        })
-        .collect::<HashMap<_, _>>();
 
-    let endpoints_by_peer = connection_events
-        .iter()
-        .fold(HashMap::new(), |mut acc, event| {
-            let peer_id = event.peer_id;
-            let endpoint = &event.endpoint;
-            let events = acc.entry(peer_id).or_insert_with(HashSet::new);
-            events.insert(endpoint);
-            acc
-        });
-    println!("Endpoints by peer: {:#?}", endpoints_by_peer);
-
-    println!("Peer Identities: {:#?}", peer_identities);
-    let number_and_average_time_by_peer = connection_durations_by_peer
-        .iter()
-        .map(|(peer_id, durations)| {
-            let total = durations.iter().sum::<Duration>();
-            let average = if durations.len() > 0 {
-                total / durations.len() as u32
-            } else {
-                Duration::from_secs(0)
-            };
-            (peer_id, durations.len(), average)
-        })
-        .collect::<Vec<_>>();
-    println!(
-        "Number and average time by peer: {:#?}",
-        number_and_average_time_by_peer
-    );
-
-    println!("Connected peers: {:#?}", connected_peers);
+    swarm.behaviour().peer_manager.log_identities();
+    swarm.behaviour().peer_manager.log_metrics();
     Ok(())
 }
 
