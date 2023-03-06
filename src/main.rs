@@ -124,9 +124,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connection_event_buffer_size(64)
         .connection_limits(
             ConnectionLimits::default()
-                .with_max_pending_incoming(Some(5))
-                .with_max_pending_outgoing(Some(16))
-                .with_max_established_per_peer(Some(1)),
+                .with_max_pending_incoming(Some(64))
+                .with_max_pending_outgoing(Some(32))
+                .with_max_established_per_peer(Some(10)),
         )
         .build();
 
