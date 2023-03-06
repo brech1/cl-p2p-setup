@@ -25,6 +25,7 @@ pub struct Discovery {
     multiaddr_map: HashMap<PeerId, Multiaddr>,
     peers_future: FuturesUnordered<std::pin::Pin<Box<dyn Future<Output = DiscResult> + Send>>>,
     started: bool,
+    poll_count: u64,
 }
 
 type DiscResult = Result<Vec<discv5::enr::Enr<CombinedKey>>, discv5::QueryError>;
@@ -117,6 +118,7 @@ impl Discovery {
                     peers.insert(peer_id, None);
                 }
 
+                println!("Found {} peers", peers.len());
                 return Some(DiscoveredPeers { peers });
             }
         }
@@ -162,8 +164,11 @@ impl NetworkBehaviour for Discovery {
         cx: &mut Context,
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-        if !self.started {
+        // println!("Discovery polled : {}", self.poll_count);
+        self.poll_count += 1;
+        if self.poll_count % 100 == 1 {
             self.started = true;
+            println!("Finding Peers");
             self.find_peers();
 
             return Poll::Pending;

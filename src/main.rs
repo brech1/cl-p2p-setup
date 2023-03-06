@@ -143,6 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => ()
                     },
                     BehaviourEvent::Discovery(discovered) => {
+                        println!("Discovery Event: {:#?}", discovered);
                         for (peer_id, _multiaddr) in discovered.peers {
                             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                         }
@@ -176,13 +177,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
-                        Err(e) =>  println!("{}", e),
-                    }},
-                    BehaviourEvent::Identify(ev) => println!("identify: {:#?}", ev),
+                        Err(e) =>  println!("Error in RPC quest handling: {}", e),
+                    }}
                 },
                 SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
                 _ => println!("Swarm: {event:?}"),
+            },
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                println!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
             }
         }
     }
@@ -248,6 +251,8 @@ impl DataTransform for SnappyTransform {
 
         let mut decoder = Decoder::new();
         let decompressed_data = decoder.decompress_vec(&raw_message.data)?;
+
+        println!("Decompressed data: {:#?}", decompressed_data);
 
         Ok(GossipsubMessage {
             source: raw_message.source,
