@@ -1,5 +1,6 @@
 use crate::config::{DUPLICATE_CACHE_TIME, GOSSIP_MAX_SIZE_BELLATRIX};
 use crate::discovery::Discovery;
+use crate::peer_manager::PeerManager;
 use crate::rpc::protocol::InboundRequest;
 use crate::rpc::{ReqId, RequestId, RPC};
 use libp2p::futures::StreamExt;
@@ -21,6 +22,7 @@ mod chain;
 mod config;
 mod discovery;
 mod enr;
+mod peer_manager;
 mod rpc;
 use crate::rpc::methods::{
     EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
@@ -40,6 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transport = build_transport(&local_key)?;
 
     let discovery = Discovery::new(&local_key).await;
+
+    let target_num_peers = 16;
+    let peer_manager = PeerManager::new(target_num_peers);
 
     fn prefix(prefix: [u8; 4], message: &GossipsubMessage) -> Vec<u8> {
         let topic_bytes = message.topic.as_str().as_bytes();
@@ -108,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         discovery: Discovery,
         rpc: RPC<RequestId<AppReqId>>,
         identify: identify::Behaviour,
+        peer_manager: PeerManager,
     }
 
     let behaviour = {
@@ -116,6 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discovery,
             rpc,
             identify,
+            peer_manager,
         }
     };
 
@@ -169,11 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => ()
                     },
                     BehaviourEvent::Discovery(discovered) => {
-                        println!("Discovery Event: {:#?}", discovered);
-                        for (peer_id, _multiaddr) in discovered.peers {
-                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                            // swarm.dial(peer_id).expect("Dial peer");
-                        }
+                        println!("Discovery Event: {:#?}", &discovered);
+                            swarm.behaviour_mut().peer_manager.add_peers(discovered.peers.into_iter().map(|(peer_id, _)| peer_id).collect());
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
                         println!("RPC message: {:#?}", rpc_message);
@@ -213,6 +217,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 peer_identities.insert(peer_id, info);
                             }
                             _ => {}
+                        }
+                    },
+                    BehaviourEvent::PeerManager(ev) => {
+                        println!("PeerManager event: {:#?}", ev);
+                        match ev {
+                            peer_manager::PeerManagerEvent::DiscoverPeers(num_peers) => {
+                                swarm.behaviour_mut().discovery.set_peers_to_discover(num_peers as usize);
+                            },
+                            peer_manager::PeerManagerEvent::DialPeers(peer_ids) => {
+                                for peer_id in peer_ids {
+                                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                }
+                            },
                         }
                     },
                 },
@@ -414,7 +431,6 @@ impl DataTransform for SnappyTransform {
 
         let mut decoder = Decoder::new();
         let decompressed_data = decoder.decompress_vec(&raw_message.data)?;
-
 
         Ok(GossipsubMessage {
             source: raw_message.source,

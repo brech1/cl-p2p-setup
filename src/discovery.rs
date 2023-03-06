@@ -25,8 +25,8 @@ pub struct Discovery {
     event_stream: EventStream,
     multiaddr_map: HashMap<PeerId, Multiaddr>,
     peers_future: FuturesUnordered<std::pin::Pin<Box<dyn Future<Output = DiscResult> + Send>>>,
+    peers_to_discover: usize,
     started: bool,
-    poll_count: u64,
 }
 
 type DiscResult = Result<Vec<discv5::enr::Enr<CombinedKey>>, discv5::QueryError>;
@@ -81,11 +81,15 @@ impl Discovery {
             multiaddr_map: HashMap::new(),
             peers_future: FuturesUnordered::new(),
             started: false,
-            poll_count: 0,
+            peers_to_discover: 0,
         };
     }
 
-    fn find_peers(&mut self) {
+    pub fn  set_peers_to_discover(&mut self, peers_to_discover: usize) {
+        self.peers_to_discover = peers_to_discover;
+    }
+
+    fn find_peers(&mut self, count: usize) {
         let fork_digest = self._enr.fork_id().unwrap().fork_digest;
 
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
@@ -94,7 +98,7 @@ impl Discovery {
 
         let target = NodeId::random();
 
-        let peers_enr = self.discv5.find_node_predicate(target, predicate, 32);
+        let peers_enr = self.discv5.find_node_predicate(target, predicate, count);
 
         self.peers_future.push(Box::pin(peers_enr));
     }
@@ -168,11 +172,11 @@ impl NetworkBehaviour for Discovery {
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
         // println!("Discovery polled : {}", self.poll_count);
-        self.poll_count += 1;
-        if self.poll_count % 100 == 1 {
+        if self.peers_to_discover > 0 {
             self.started = true;
             println!("Finding Peers");
-            self.find_peers();
+            self.find_peers(self.peers_to_discover);
+            self.peers_to_discover = 0;
 
             return Poll::Pending;
         }
