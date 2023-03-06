@@ -167,7 +167,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BehaviourEvent::Discovery(discovered) => {
                         println!("Discovery Event: {:#?}", discovered);
                         for (peer_id, _multiaddr) in discovered.peers {
-                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                            // swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                            swarm.dial(peer_id).expect("Dial peer");
                         }
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
