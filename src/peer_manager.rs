@@ -218,6 +218,9 @@ impl PeerManager {
 
     pub fn add_peers(&mut self, peer_ids: Vec<PeerId>) {
         for peer_id in peer_ids {
+            if self.peer_data.contains_key(&peer_id) {
+                continue;
+            }
             self.peer_data.insert(peer_id, PeerData::new());
             self.new_peers.insert(peer_id);
         }
