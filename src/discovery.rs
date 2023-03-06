@@ -18,6 +18,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
+
 pub struct Discovery {
     discv5: Discv5,
     _enr: Enr,
@@ -93,7 +94,7 @@ impl Discovery {
 
         let target = NodeId::random();
 
-        let peers_enr = self.discv5.find_node_predicate(target, predicate, 16);
+        let peers_enr = self.discv5.find_node_predicate(target, predicate, 32);
 
         self.peers_future.push(Box::pin(peers_enr));
     }

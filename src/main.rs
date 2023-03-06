@@ -29,6 +29,7 @@ use std::collections::{HashMap, HashSet};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     // Create a random PeerId
     let local_key = identity::Keypair::generate_secp256k1();
     let local_peer_id = PeerId::from(local_key.public());
@@ -152,6 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut connection_events: Vec<TimedConnectionEvent> = Vec::new();
     let mut peer_identities = HashMap::new();
+    let mut peer_connection_times = HashMap::new();
+    let mut redialable_peers = HashSet::new();
+    let MIN_CONNECTION_DURATION_FOR_RETRY = Duration::from_secs(2);
 
     let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 1);
     // Run
@@ -167,8 +171,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BehaviourEvent::Discovery(discovered) => {
                         println!("Discovery Event: {:#?}", discovered);
                         for (peer_id, _multiaddr) in discovered.peers {
-                            // swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                            swarm.dial(peer_id).expect("Dial peer");
+                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                            // swarm.dial(peer_id).expect("Dial peer");
                         }
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
@@ -223,10 +227,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                         time: std::time::Instant::now(),
                     });
-                    match swarm.dial(peer_id) {
-                        Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
-                        Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
-                    }
+                    // match swarm.dial(peer_id) {
+                    //     Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
+                    //     Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
+                    // }
+
+                        let last_connection_time = peer_connection_times.get(&peer_id);
+                        match last_connection_time {
+                            Some(last_connection_time) => {
+                                let time_since_last_connection = std::time::Instant::now() - *last_connection_time;
+                                if time_since_last_connection > MIN_CONNECTION_DURATION_FOR_RETRY {
+                                    println!("Peer {:?} was connected for {:?} - Registering for redialing", peer_id, time_since_last_connection);
+                                    redialable_peers.insert(peer_id);
+                                }
+                            },
+                            None => {
+                                println!("Peer {:?} was never connected - not Re-Dialing peer", peer_id);
+                            }
+                        }
+                        if redialable_peers.contains(&peer_id) {
+                            match swarm.dial(peer_id) {
+                                Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
+                                Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
+                            }
+                        }
+
+
 
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
@@ -238,13 +264,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         event: ConnectionEvent::Connected,
                         time: std::time::Instant::now(),
                     });
+                    peer_connection_times.insert(peer_id, std::time::Instant::now());
                 },
-                SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
+                SwarmEvent::OutgoingConnectionError { peer_id, error } => {
+                    println!("OutgoingConnectionError for peer_id: {peer_id:?} : {error:?}");
+                    if let Some(peer_id) = peer_id {
+                    if redialable_peers.contains(&peer_id) {
+                        match swarm.dial(peer_id) {
+                            Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
+                            Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
+                        }
+                    }
+                    }
+                },
                 _ => println!("Swarm: {event:?}"),
             },
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                println!("Connected peers gossipsub: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
-                println!("Connected peers swarm: {}", swarm.network_info().num_peers());
+                println!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
             }
         }
     }
@@ -345,7 +381,7 @@ pub fn build_transport(
             yamux_config,
             mplex_config,
         ))
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(100))
         .boxed())
 }
 
@@ -379,7 +415,6 @@ impl DataTransform for SnappyTransform {
         let mut decoder = Decoder::new();
         let decompressed_data = decoder.decompress_vec(&raw_message.data)?;
 
-        println!("Decompressed data: {:#?}", decompressed_data);
 
         Ok(GossipsubMessage {
             source: raw_message.source,
@@ -394,6 +429,7 @@ impl DataTransform for SnappyTransform {
         _topic: &TopicHash,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, std::io::Error> {
+        println!("Outbound transform: {}", _topic);
         if data.len() > self.max_size_per_message {
             return Err(Error::new(
                 ErrorKind::InvalidData,
