@@ -25,7 +25,7 @@ mod rpc;
 use crate::rpc::methods::{
     EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -151,8 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut connection_events: Vec<TimedConnectionEvent> = Vec::new();
+    let mut peer_identities = HashMap::new();
 
-    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 1);
     // Run
     while std::time::Instant::now() < time_to_stop {
         tokio::select! {
@@ -199,7 +200,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
                         Err(e) =>  println!("Error in RPC quest handling: {}", e),
-                    }}
+                    }},
+                    BehaviourEvent::Identify(ev) => {
+                        println!("identify: {:#?}", ev);
+                        match ev {
+                            identify::IdentifyEvent::Received { peer_id, info, .. } => {
+                                peer_identities.insert(peer_id, info);
+                            }
+                            _ => {}
+                        }
+                    },
                 },
                 SwarmEvent::ConnectionClosed { peer_id, endpoint, num_established, cause } => {
                     println!("ConnectionClosed: Cause {cause:?} - PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
@@ -212,6 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ),
                         time: std::time::Instant::now(),
                     });
+                    match swarm.dial(peer_id) {
+                        Ok(_) => println!("Re-Dialing peer: {:?}", peer_id),
+                        Err(e) => println!("Error re-dialing peer: {:?} - Error: {:?}", peer_id, e),
+                    }
 
                 },
                 SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
@@ -228,19 +242,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => println!("Swarm: {event:?}"),
             },
             _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                println!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
+                println!("Connected peers gossipsub: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
+                println!("Connected peers swarm: {}", swarm.network_info().num_peers());
             }
         }
-    };
+    }
 
-    let connection_events_by_peer_ids = connection_events
-        .into_iter()
-        .fold(HashMap::new(), |mut acc, event| {
-            let peer_id = event.peer_id;
-            let events = acc.entry(peer_id).or_insert_with(Vec::new);
-            events.push(event);
-            acc
-        });
+    let connection_events_by_peer_ids =
+        connection_events
+            .iter()
+            .fold(HashMap::new(), |mut acc, event| {
+                let peer_id = event.peer_id;
+                let events = acc.entry(peer_id).or_insert_with(Vec::new);
+                events.push(event);
+                acc
+            });
+    let mut connected_peers = HashSet::new();
     let connection_durations_by_peer = connection_events_by_peer_ids
         .into_iter()
         .map(|(peer_id, events)| {
@@ -259,18 +276,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            if let Some(connected) = connected {
+                durations.push(std::time::Instant::now() - connected);
+                connected_peers.insert(peer_id);
+            }
             (peer_id, durations)
         })
         .collect::<HashMap<_, _>>();
+
+    let endpoints_by_peer = connection_events
+        .iter()
+        .fold(HashMap::new(), |mut acc, event| {
+            let peer_id = event.peer_id;
+            let endpoint = &event.endpoint;
+            let events = acc.entry(peer_id).or_insert_with(HashSet::new);
+            events.insert(endpoint);
+            acc
+        });
+    println!("Endpoints by peer: {:#?}", endpoints_by_peer);
+
+    println!("Peer Identities: {:#?}", peer_identities);
     let number_and_average_time_by_peer = connection_durations_by_peer
-        .into_iter()
+        .iter()
         .map(|(peer_id, durations)| {
             let total = durations.iter().sum::<Duration>();
-            let average = total / durations.len() as u32;
+            let average = if durations.len() > 0 {
+                total / durations.len() as u32
+            } else {
+                Duration::from_secs(0)
+            };
             (peer_id, durations.len(), average)
         })
         .collect::<Vec<_>>();
-    println!("Number and average time by peer: {:#?}", number_and_average_time_by_peer);
+    println!(
+        "Number and average time by peer: {:#?}",
+        number_and_average_time_by_peer
+    );
+
+    println!("Connected peers: {:#?}", connected_peers);
     Ok(())
 }
 
