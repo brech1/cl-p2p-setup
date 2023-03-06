@@ -156,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     BehaviourEvent::Discovery(discovered) => {
                         debug!("Discovery Event: {:#?}", &discovered);
-                            swarm.behaviour_mut().peer_manager.add_peers(discovered.peers.into_iter().map(|(peer_id, _)| peer_id).collect());
+                            swarm.behaviour_mut().peer_manager.add_peers(discovered.peers);
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
                         debug!("RPC message: {:#?}", rpc_message);

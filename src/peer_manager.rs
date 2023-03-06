@@ -5,6 +5,7 @@ use libp2p::{
         dummy::ConnectionHandler,
         NetworkBehaviour, NetworkBehaviourAction, PollParameters,
     },
+    Multiaddr,
     PeerId,
 };
 use std::collections::{HashMap, HashSet};
@@ -21,7 +22,7 @@ pub struct PeerManager {
     peer_identities: HashMap<PeerId, IdentifyInfo>,
     target_peer_number: u32,
     peers_to_discover: u32,
-    /// The heartbeat interval to perform routine maintenance.
+    /// The heartbeat interval to timeout dialling peers
     heartbeat: tokio::time::Interval,
     waiting_for_peer_discovery: bool,
 }
@@ -38,13 +39,15 @@ pub enum PeerManagerEvent {
 pub struct PeerData {
     pub connection_history: Vec<ConnectionData>,
     pub average_connection_duration: Option<usize>,
+    pub multiaddr: Option<Multiaddr>,
 }
 
 impl PeerData {
-    pub fn new() -> Self {
+    pub fn new(multiaddr: Option<Multiaddr>) -> Self {
         Self {
             connection_history: Vec::new(),
             average_connection_duration: None,
+            multiaddr
         }
     }
 }
@@ -144,6 +147,19 @@ impl NetworkBehaviour for PeerManager {
             }
         }
     }
+
+    fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
+        let mut peer_address: Vec<Multiaddr> = Vec::new();
+
+        if let Some(peer_data) = self.peer_data.get(peer_id) {
+            if let Some(address) = &peer_data.multiaddr {
+                peer_address.push(address.clone());
+            }
+        }
+
+        return peer_address;
+    }
+
 }
 impl PeerManager {
     pub fn new(target_peer_number: u32) -> Self {
@@ -216,13 +232,18 @@ impl PeerManager {
         peers_to_dial
     }
 
-    pub fn add_peers(&mut self, peer_ids: Vec<PeerId>) {
-        for peer_id in peer_ids {
+    pub fn add_peers(&mut self, peer_ids: HashMap<PeerId, Option<Multiaddr>>) {
+        for (peer_id, multiaddr) in peer_ids.iter() {
             if self.peer_data.contains_key(&peer_id) {
                 continue;
             }
-            self.peer_data.insert(peer_id, PeerData::new());
-            self.new_peers.insert(peer_id);
+            let multiaddr = if let Some(multiaddr) = multiaddr {
+                Some(multiaddr.clone())
+            } else {
+                None
+            };
+            self.peer_data.insert(*peer_id, PeerData::new(multiaddr));
+            self.new_peers.insert(*peer_id);
         }
         self.waiting_for_peer_discovery = false;
     }

@@ -24,7 +24,6 @@ pub struct Discovery {
     discv5: Discv5,
     _enr: Enr,
     event_stream: EventStream,
-    multiaddr_map: HashMap<PeerId, Multiaddr>,
     peers_future: FuturesUnordered<std::pin::Pin<Box<dyn Future<Output = DiscResult> + Send>>>,
     peers_to_discover: usize,
     started: bool,
@@ -34,7 +33,7 @@ type DiscResult = Result<Vec<discv5::enr::Enr<CombinedKey>>, discv5::QueryError>
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredPeers {
-    pub peers: HashMap<PeerId, Option<Instant>>,
+    pub peers: HashMap<PeerId, Option<Multiaddr>>,
 }
 
 impl Discovery {
@@ -81,7 +80,6 @@ impl Discovery {
             discv5,
             _enr: local_enr,
             event_stream,
-            multiaddr_map: HashMap::new(),
             peers_future: FuturesUnordered::new(),
             started: false,
             peers_to_discover: 0,
@@ -111,7 +109,7 @@ impl Discovery {
             if res.is_ok() {
                 self.peers_future = FuturesUnordered::new();
 
-                let mut peers: HashMap<PeerId, Option<Instant>> = HashMap::new();
+                let mut peers: HashMap<PeerId, Option<Multiaddr>> = HashMap::new();
 
                 for peer_enr in res.unwrap() {
                     match self.discv5.add_enr(peer_enr.clone()) {
@@ -125,15 +123,15 @@ impl Discovery {
                     };
                     let peer_id = peer_enr.clone().as_peer_id();
 
+                    let mut multiaddr: Option<Multiaddr> = None;
                     if peer_enr.ip4().is_some() && peer_enr.tcp4().is_some() {
-                        let mut multiaddr: Multiaddr = peer_enr.ip4().unwrap().into();
+                        let mut multiaddr_inner: Multiaddr = peer_enr.ip4().unwrap().into();
+                        multiaddr_inner.push(Protocol::Tcp(peer_enr.tcp4().unwrap()));
+                        multiaddr = Some(multiaddr_inner);
 
-                        multiaddr.push(Protocol::Tcp(peer_enr.tcp4().unwrap()));
-
-                        self.multiaddr_map.insert(peer_id, multiaddr);
                     }
+                    peers.insert(peer_id, multiaddr);
 
-                    peers.insert(peer_id, None);
                 }
 
                 println!("Found {} peers", peers.len());
@@ -165,16 +163,6 @@ impl NetworkBehaviour for Discovery {
 
     fn new_handler(&mut self) -> Self::ConnectionHandler {
         libp2p::swarm::dummy::ConnectionHandler {}
-    }
-
-    fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
-        let mut peer_address: Vec<Multiaddr> = Vec::new();
-
-        if let Some(address) = self.multiaddr_map.get(peer_id) {
-            peer_address.push(address.clone());
-        }
-
-        return peer_address;
     }
 
     // Main execution loop to drive the behaviour
