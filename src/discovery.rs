@@ -80,6 +80,7 @@ impl Discovery {
             multiaddr_map: HashMap::new(),
             peers_future: FuturesUnordered::new(),
             started: false,
+            poll_count: 0,
         };
     }
 
@@ -119,6 +120,7 @@ impl Discovery {
                 }
 
                 println!("Found {} peers", peers.len());
+                println!("Peers: {:#?}", &peers);
                 return Some(DiscoveredPeers { peers });
             }
         }

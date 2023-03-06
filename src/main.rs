@@ -25,6 +25,7 @@ mod rpc;
 use crate::rpc::methods::{
     EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
 };
+use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -132,8 +133,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
+    #[derive(Debug)]
+    enum ConnectionEvent {
+        Connected,
+        Disconnected(Option<String>),
+    }
+    // Map to keep track of connections
+    #[derive(Debug)]
+    struct TimedConnectionEvent {
+        peer_id: PeerId,
+        /// Endpoint of the connection that has been closed.
+        endpoint: String,
+        /// Number of other remaining connections to this same peer.
+        num_established: u32,
+        event: ConnectionEvent,
+        time: std::time::Instant,
+    }
+
+    let mut connection_events: Vec<TimedConnectionEvent> = Vec::new();
+
+    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60);
     // Run
-    loop {
+    while std::time::Instant::now() < time_to_stop {
         tokio::select! {
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
@@ -180,7 +201,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) =>  println!("Error in RPC quest handling: {}", e),
                     }}
                 },
-                SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
+                SwarmEvent::ConnectionClosed { peer_id, endpoint, num_established, cause } => {
+                    println!("ConnectionClosed: Cause {cause:?} - PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
+                    connection_events.push(TimedConnectionEvent {
+                        peer_id,
+                        endpoint: format!("{:?}", endpoint),
+                        num_established,
+                        event: ConnectionEvent::Disconnected(
+                            cause.map(|e| e.to_string())
+                        ),
+                        time: std::time::Instant::now(),
+                    });
+
+                },
+                SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
+                    println!("ConnectionEstablished: PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
+                    connection_events.push(TimedConnectionEvent {
+                            peer_id,
+                            endpoint: format!("{:?}", endpoint),
+                            num_established: num_established.into(),
+                        event: ConnectionEvent::Connected,
+                        time: std::time::Instant::now(),
+                    });
+                },
                 SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
                 _ => println!("Swarm: {event:?}"),
             },
@@ -188,7 +231,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
             }
         }
-    }
+    };
+
+    let connection_events_by_peer_ids = connection_events
+        .into_iter()
+        .fold(HashMap::new(), |mut acc, event| {
+            let peer_id = event.peer_id;
+            let events = acc.entry(peer_id).or_insert_with(Vec::new);
+            events.push(event);
+            acc
+        });
+    let connection_durations_by_peer = connection_events_by_peer_ids
+        .into_iter()
+        .map(|(peer_id, events)| {
+            let mut connected = None;
+            let mut durations = Vec::new();
+            for event in events {
+                match event.event {
+                    ConnectionEvent::Connected => {
+                        connected = Some(event.time);
+                    }
+                    ConnectionEvent::Disconnected(_) => {
+                        if let Some(connected) = connected {
+                            durations.push(event.time - connected);
+                        }
+                        connected = None;
+                    }
+                }
+            }
+            (peer_id, durations)
+        })
+        .collect::<HashMap<_, _>>();
+    let number_and_average_time_by_peer = connection_durations_by_peer
+        .into_iter()
+        .map(|(peer_id, durations)| {
+            let total = durations.iter().sum::<Duration>();
+            let average = total / durations.len() as u32;
+            (peer_id, durations.len(), average)
+        })
+        .collect::<Vec<_>>();
+    println!("Number and average time by peer: {:#?}", number_and_average_time_by_peer);
+    Ok(())
 }
 
 pub fn build_transport(
