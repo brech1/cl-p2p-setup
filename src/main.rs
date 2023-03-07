@@ -30,6 +30,8 @@ use crate::rpc::methods::{
 };
 use std::collections::{HashMap, HashSet};
 
+const PEER_DATA_FILE: &str = "peer_data.json";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
@@ -45,7 +47,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let discovery = Discovery::new(&local_key).await;
 
     let target_num_peers = 16;
-    let peer_manager = PeerManager::new(target_num_peers);
+    let mut peer_manager = PeerManager::new(target_num_peers);
+    peer_manager.load_peer_data(PEER_DATA_FILE);
 
     fn prefix(prefix: [u8; 4], message: &GossipsubMessage) -> Vec<u8> {
         let topic_bytes = message.topic.as_str().as_bytes();
@@ -229,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     swarm.behaviour().peer_manager.log_identities();
     swarm.behaviour().peer_manager.log_metrics();
+    swarm.behaviour_mut().peer_manager.save_peer_data(PEER_DATA_FILE);
     Ok(())
 }
 

@@ -9,8 +9,13 @@ use libp2p::{
     PeerId,
 };
 use std::collections::{HashMap, HashSet};
+use std::io::prelude::*;
+use std::fs::File;
+use std::path::Path;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
+use serde::{Serialize, Deserialize};
+use serde_millis;
 
 use log::{debug, error, info, trace, warn};
 
@@ -35,7 +40,7 @@ pub enum PeerManagerEvent {
     DialPeers(Vec<PeerId>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PeerData {
     pub connection_history: Vec<ConnectionData>,
     pub average_connection_duration: Option<usize>,
@@ -52,18 +57,22 @@ impl PeerData {
     }
 }
 
-const MIN_AVERAGE_CONNECTION_DURATION: usize = 5000;
+const MIN_AVERAGE_CONNECTION_DURATION: usize = 3000;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectionData {
+    #[serde(with = "serde_millis")]
     pub established_timestamp: Option<Instant>,
+    #[serde(with = "serde_millis")]
     pub failure_timestamp: Option<Instant>,
+    #[serde(with = "serde_millis")]
     pub disconnect_timestamp: Option<Instant>,
+    #[serde(with = "serde_millis")]
     pub dial_timestamp: Instant,
     pub connection_status: ConnectionStatus,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum ConnectionStatus {
     Connecting,
     Connected,
@@ -123,13 +132,13 @@ impl NetworkBehaviour for PeerManager {
         match event {
             FromSwarm::ConnectionEstablished(ConnectionEstablished {
                 peer_id,
-                endpoint,
-                other_established,
+                endpoint: _,
+                other_established: _,
                 ..
             }) => self.on_connection_established(peer_id),
             FromSwarm::ConnectionClosed(ConnectionClosed {
                 peer_id,
-                remaining_established,
+                remaining_established: _,
                 ..
             }) => self.on_connection_closed(peer_id),
             FromSwarm::DialFailure(DialFailure { peer_id, .. }) => self.on_dial_failure(peer_id),
@@ -376,11 +385,14 @@ impl PeerManager {
             let b_score = PeerManager::get_peer_score(b);
             a_score.cmp(&b_score)
         });
-        peer_data
+        let best_peers = peer_data
             .iter()
             .take(num_peers as usize)
             .map(|(peer_id, _)| *peer_id)
-            .collect()
+            .collect::<Vec<_>>();
+        info!("Found {:} peers for redialing", best_peers.len());
+        debug!("Best peers for redial: {:?}", best_peers);
+        return best_peers;
     }
 
     fn get_peer_score(peer_data: &PeerData) -> usize {
@@ -426,5 +438,37 @@ impl PeerManager {
 
         info!("Connected peers: {:#?}", self.connected_peers);
         info!("dialling Peers: {:#?}", self.dialling_peers);
+    }
+
+    pub fn save_peer_data(&mut self, filename: &str) {
+        self.disconnect_all_peers();
+        let mut file = File::create(filename).expect("Unable to create file");
+        file.write_all(
+            serde_json::to_string_pretty(&self.peer_data)
+                .expect("Unable to serialize peer data")
+                .as_bytes(),
+        )
+        .expect("Unable to write to file");
+    }
+
+    fn disconnect_all_peers(&mut self) {
+        let peers_to_disconnect = self.connected_peers.iter().cloned().collect::<Vec<_>>();
+        for peer_id in peers_to_disconnect {
+            self.on_connection_closed(peer_id);
+        }
+    }
+
+    pub fn load_peer_data(&mut self, filename: &str) {
+        if Path::new(filename).is_file() {
+            info!("Reading peer data from file");
+            let mut file = File::open(filename).expect("Unable to open file");
+            let mut contents = String::new();
+            file.read_to_string(&mut contents)
+                .expect("Unable to read file");
+            self.peer_data = serde_json::from_str(&contents).expect("Unable to deserialize peer data");
+            debug!("Successfully loaded peer_data: {:#?}", self.peer_data);
+        } else {
+            info!("No peer data file found");
+        }
     }
 }
