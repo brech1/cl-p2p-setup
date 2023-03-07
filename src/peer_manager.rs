@@ -5,17 +5,16 @@ use libp2p::{
         dummy::ConnectionHandler,
         NetworkBehaviour, NetworkBehaviourAction, PollParameters,
     },
-    Multiaddr,
-    PeerId,
+    Multiaddr, PeerId,
 };
+use serde::{Deserialize, Serialize};
+use serde_millis;
 use std::collections::{HashMap, HashSet};
-use std::io::prelude::*;
 use std::fs::File;
+use std::io::prelude::*;
 use std::path::Path;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use serde::{Serialize, Deserialize};
-use serde_millis;
 
 use log::{debug, error, info, trace, warn};
 
@@ -52,7 +51,7 @@ impl PeerData {
         Self {
             connection_history: Vec::new(),
             average_connection_duration: None,
-            multiaddr
+            multiaddr,
         }
     }
 }
@@ -81,7 +80,10 @@ pub enum ConnectionStatus {
     Timeout,
 }
 
-const DIAL_TIMEOUT: u64 = 5;
+// Interval for which to check if we need to dial new peers
+const HEARTBEAT_INTERVAL: u64 = 500;
+// Consider connection attempt timed out if it takes longer than this duration (in ms)
+const DIAL_TIMEOUT: u64 = 5000;
 
 impl NetworkBehaviour for PeerManager {
     type ConnectionHandler = ConnectionHandler;
@@ -93,9 +95,6 @@ impl NetworkBehaviour for PeerManager {
         cx: &mut Context<'_>,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-        while self.heartbeat.poll_tick(cx).is_ready() {
-            self.timeout_dialling_peers();
-        }
 
         // perform the heartbeat when necessary
         if !self.waiting_for_peer_discovery {
@@ -107,6 +106,9 @@ impl NetworkBehaviour for PeerManager {
                 self.waiting_for_peer_discovery = true;
                 return ev;
             }
+        }
+        while self.heartbeat.poll_tick(cx).is_ready() {
+            self.timeout_dialling_peers();
             let missing_peers =
                 self.target_peer_number - self.connected_and_dialling_peers().len() as u32;
             if missing_peers > self.peers_to_discover / 4 {
@@ -119,7 +121,6 @@ impl NetworkBehaviour for PeerManager {
                     ));
                 }
             }
-            return Poll::Pending;
         }
         Poll::Pending
     }
@@ -168,12 +169,11 @@ impl NetworkBehaviour for PeerManager {
 
         return peer_address;
     }
-
 }
 impl PeerManager {
     pub fn new(target_peer_number: u32) -> Self {
         // Set up the peer manager heartbeat interval
-        let heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(DIAL_TIMEOUT));
+        let heartbeat = tokio::time::interval(tokio::time::Duration::from_millis(HEARTBEAT_INTERVAL));
         Self {
             new_peers: HashSet::new(),
             connected_peers: HashSet::new(),
@@ -194,8 +194,8 @@ impl PeerManager {
             if let Some(peer_data) = self.peer_data.get_mut(peer_id) {
                 if let Some(connection_data) = peer_data.connection_history.last_mut() {
                     if connection_data.connection_status == ConnectionStatus::Connecting
-                        && now.duration_since(connection_data.dial_timestamp).as_secs()
-                            > DIAL_TIMEOUT
+                        && now.duration_since(connection_data.dial_timestamp).as_millis()
+                            > DIAL_TIMEOUT.into()
                     {
                         connection_data.connection_status = ConnectionStatus::Timeout;
                         connection_data.failure_timestamp = Some(now);
@@ -465,7 +465,8 @@ impl PeerManager {
             let mut contents = String::new();
             file.read_to_string(&mut contents)
                 .expect("Unable to read file");
-            self.peer_data = serde_json::from_str(&contents).expect("Unable to deserialize peer data");
+            self.peer_data =
+                serde_json::from_str(&contents).expect("Unable to deserialize peer data");
             debug!("Successfully loaded peer_data: {:#?}", self.peer_data);
         } else {
             info!("No peer data file found");
