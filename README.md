@@ -12,4 +12,4 @@ It is based on the [lighthouse](https://github.com/sigp/lighthouse) client beaco
 
 ## Issues
 
-Although it's possible to currently receive blocks, connections are still hard to maintain, so a peer manager has to be implemented to keep the connected peers amount stable.
+After adding a PeerManager we usually manage to maintain a peer count > 0, however most peers still disconnect almost immediately. The reason for this should be investigated and fixed.
