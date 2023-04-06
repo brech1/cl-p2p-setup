@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     BehaviourEvent::Identify(ev) => {
                         debug!("identify: {:#?}", ev);
                         match ev {
-                            identify::IdentifyEvent::Received { peer_id, info, .. } => {
+                            libp2p::identify::Event::Received { peer_id, info, .. } => {
                                 swarm.behaviour_mut().peer_manager.add_peer_identity(peer_id, info);
                             }
                             _ => {}
