@@ -9,16 +9,15 @@ use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
-use log::{debug, error, info, trace, warn};
+use log::{debug, warn};
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
-
 
 pub struct Discovery {
     discv5: Discv5,
@@ -42,7 +41,7 @@ impl Discovery {
         let listen_socket = "0.0.0.0:9000".parse::<SocketAddr>().unwrap();
 
         // Generate ENR
-        let enr_key: CombinedKey = key_from_libp2p(&local_key).unwrap();
+        let enr_key: CombinedKey = key_from_libp2p(local_key).unwrap();
 
         let local_enr = build_enr(&enr_key);
 
@@ -76,17 +75,17 @@ impl Discovery {
         // Obtain an event stream
         let event_stream = EventStream::Awaiting(Box::pin(discv5.event_stream()));
 
-        return Self {
+        Self {
             discv5,
             _enr: local_enr,
             event_stream,
             peers_future: FuturesUnordered::new(),
             started: false,
             peers_to_discover: 0,
-        };
+        }
     }
 
-    pub fn  set_peers_to_discover(&mut self, peers_to_discover: usize) {
+    pub fn set_peers_to_discover(&mut self, peers_to_discover: usize) {
         self.peers_to_discover = peers_to_discover;
     }
 
@@ -118,7 +117,6 @@ impl Discovery {
                         }
                         Err(_) => {
                             warn!("Failed to add peer: {:?} to discv5", peer_enr.node_id());
-
                         }
                     };
                     let peer_id = peer_enr.clone().as_peer_id();
@@ -128,10 +126,8 @@ impl Discovery {
                         let mut multiaddr_inner: Multiaddr = peer_enr.ip4().unwrap().into();
                         multiaddr_inner.push(Protocol::Tcp(peer_enr.tcp4().unwrap()));
                         multiaddr = Some(multiaddr_inner);
-
                     }
                     peers.insert(peer_id, multiaddr);
-
                 }
 
                 println!("Found {} peers", peers.len());

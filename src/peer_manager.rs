@@ -8,7 +8,7 @@ use libp2p::{
     Multiaddr, PeerId,
 };
 use serde::{Deserialize, Serialize};
-use serde_millis;
+
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::prelude::*;
@@ -16,7 +16,7 @@ use std::path::Path;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, info};
 
 pub struct PeerManager {
     connected_peers: HashSet<PeerId>,
@@ -95,17 +95,14 @@ impl NetworkBehaviour for PeerManager {
         cx: &mut Context<'_>,
         _params: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-
         // perform the heartbeat when necessary
-        if !self.waiting_for_peer_discovery {
-            if self.peers_to_discover > 0 {
-                let ev = Poll::Ready(NetworkBehaviourAction::GenerateEvent(
-                    PeerManagerEvent::DiscoverPeers(self.peers_to_discover),
-                ));
-                self.peers_to_discover = 0;
-                self.waiting_for_peer_discovery = true;
-                return ev;
-            }
+        if !self.waiting_for_peer_discovery && self.peers_to_discover > 0 {
+            let ev = Poll::Ready(NetworkBehaviourAction::GenerateEvent(
+                PeerManagerEvent::DiscoverPeers(self.peers_to_discover),
+            ));
+            self.peers_to_discover = 0;
+            self.waiting_for_peer_discovery = true;
+            return ev;
         }
         while self.heartbeat.poll_tick(cx).is_ready() {
             self.timeout_dialling_peers();
@@ -115,7 +112,7 @@ impl NetworkBehaviour for PeerManager {
                 let peers_to_dial = self.get_peers_to_dial(missing_peers);
                 self.peers_to_discover = missing_peers - peers_to_dial.len() as u32;
 
-                if peers_to_dial.len() > 0 {
+                if !peers_to_dial.is_empty() {
                     return Poll::Ready(NetworkBehaviourAction::GenerateEvent(
                         PeerManagerEvent::DialPeers(peers_to_dial),
                     ));
@@ -167,13 +164,14 @@ impl NetworkBehaviour for PeerManager {
             }
         }
 
-        return peer_address;
+        peer_address
     }
 }
 impl PeerManager {
     pub fn new(target_peer_number: u32) -> Self {
         // Set up the peer manager heartbeat interval
-        let heartbeat = tokio::time::interval(tokio::time::Duration::from_millis(HEARTBEAT_INTERVAL));
+        let heartbeat =
+            tokio::time::interval(tokio::time::Duration::from_millis(HEARTBEAT_INTERVAL));
         Self {
             new_peers: HashSet::new(),
             connected_peers: HashSet::new(),
@@ -194,7 +192,9 @@ impl PeerManager {
             if let Some(peer_data) = self.peer_data.get_mut(peer_id) {
                 if let Some(connection_data) = peer_data.connection_history.last_mut() {
                     if connection_data.connection_status == ConnectionStatus::Connecting
-                        && now.duration_since(connection_data.dial_timestamp).as_millis()
+                        && now
+                            .duration_since(connection_data.dial_timestamp)
+                            .as_millis()
                             > DIAL_TIMEOUT.into()
                     {
                         connection_data.connection_status = ConnectionStatus::Timeout;
@@ -236,21 +236,17 @@ impl PeerManager {
             if peers_to_dial.len() == missing_peers as usize {
                 break;
             }
-            peers_to_dial.push(peer_id.clone());
+            peers_to_dial.push(*peer_id);
         }
         peers_to_dial
     }
 
     pub fn add_peers(&mut self, peer_ids: HashMap<PeerId, Option<Multiaddr>>) {
         for (peer_id, multiaddr) in peer_ids.iter() {
-            if self.peer_data.contains_key(&peer_id) {
+            if self.peer_data.contains_key(peer_id) {
                 continue;
             }
-            let multiaddr = if let Some(multiaddr) = multiaddr {
-                Some(multiaddr.clone())
-            } else {
-                None
-            };
+            let multiaddr = multiaddr.as_ref().cloned();
             self.peer_data.insert(*peer_id, PeerData::new(multiaddr));
             self.new_peers.insert(*peer_id);
         }
@@ -378,7 +374,7 @@ impl PeerManager {
             .filter(|(_, peer_data)| {
                 peer_data.average_connection_duration.unwrap_or(0) > MIN_AVERAGE_CONNECTION_DURATION
             })
-            .map(|(peer_id, peer_data)| (peer_id.clone(), peer_data))
+            .map(|(peer_id, peer_data)| (*peer_id, peer_data))
             .collect();
         peer_data.sort_by(|(_, a), (_, b)| {
             let a_score = PeerManager::get_peer_score(a);
@@ -392,7 +388,7 @@ impl PeerManager {
             .collect::<Vec<_>>();
         info!("Found {:} peers for redialing", best_peers.len());
         debug!("Best peers for redial: {:?}", best_peers);
-        return best_peers;
+        best_peers
     }
 
     fn get_peer_score(peer_data: &PeerData) -> usize {
@@ -418,10 +414,10 @@ impl PeerManager {
                 let num_connections = peer_data.connection_history.len();
                 let average_connection_duration =
                     peer_data.average_connection_duration.unwrap_or(0);
-                let connection_status = match peer_data.connection_history.last() {
-                    Some(connection_data) => Some(&connection_data.connection_status),
-                    None => None,
-                };
+                let connection_status = peer_data
+                    .connection_history
+                    .last()
+                    .map(|connection_data| &connection_data.connection_status);
                 (
                     peer_id,
                     num_connections,

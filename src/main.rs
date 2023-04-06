@@ -14,7 +14,7 @@ use libp2p::{
     core, dns, gossipsub, identify, identity, mplex, noise, tcp, websocket, yamux, PeerId,
     Transport,
 };
-use log::{debug, error, info, trace, warn};
+use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
 use snap::raw::{decompress_len, Decoder, Encoder};
 use std::io::{Error, ErrorKind};
@@ -28,7 +28,6 @@ mod rpc;
 use crate::rpc::methods::{
     EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
 };
-use std::collections::{HashMap, HashSet};
 
 const PEER_DATA_FILE: &str = "peer_data.json";
 
@@ -145,7 +144,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
-
     let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 3);
     // Run
     while std::time::Instant::now() < time_to_stop {
@@ -229,10 +227,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
     swarm.behaviour().peer_manager.log_identities();
     swarm.behaviour().peer_manager.log_metrics();
-    swarm.behaviour_mut().peer_manager.save_peer_data(PEER_DATA_FILE);
+    swarm
+        .behaviour_mut()
+        .peer_manager
+        .save_peer_data(PEER_DATA_FILE);
     Ok(())
 }
 

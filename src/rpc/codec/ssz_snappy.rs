@@ -104,7 +104,7 @@ impl Decoder for SSZSnappyInboundCodec {
                         Ok(Some(InboundRequest::MetaData))
                     }
                 } else {
-                    return Err(RPCError::Error);
+                    Err(RPCError::Error)
                 }
             }
             Err(_) => Err(RPCError::Error),
@@ -122,7 +122,7 @@ pub fn handle_length(
     } else {
         match uvi_codec.decode(bytes).map_err(RPCError::from)? {
             Some(length) => {
-                *len = Some(length as usize);
+                *len = Some(length);
                 Ok(Some(length))
             }
             None => Ok(None),

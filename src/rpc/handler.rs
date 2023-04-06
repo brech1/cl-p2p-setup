@@ -437,7 +437,7 @@ where
                                 if let Some(ref delay_key) = info.delay_key {
                                     self.inbound_substreams_delay.remove(delay_key);
                                 }
-                                if let Err(_) = res {
+                                if res.is_err() {
                                     self.events_out
                                         .push(Err("Error shutting down the substream"));
                                 }
