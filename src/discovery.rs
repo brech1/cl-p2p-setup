@@ -1,4 +1,4 @@
-use crate::config::BOOTNODE;
+use crate::config::BOOTNODES;
 use crate::enr::{build_enr, EnrAsPeerId, EnrForkId};
 use discv5::enr::NodeId;
 use discv5::{enr::CombinedKey, Discv5, Discv5ConfigBuilder, Discv5Event, Enr};
@@ -9,21 +9,22 @@ use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
 use libp2p::swarm::{NetworkBehaviour, NetworkBehaviourAction, PollParameters};
 use libp2p::{Multiaddr, PeerId};
+use log::{debug, warn};
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub struct Discovery {
     discv5: Discv5,
     _enr: Enr,
     event_stream: EventStream,
-    multiaddr_map: HashMap<PeerId, Multiaddr>,
     peers_future: FuturesUnordered<std::pin::Pin<Box<dyn Future<Output = DiscResult> + Send>>>,
+    peers_to_discover: usize,
     started: bool,
 }
 
@@ -31,7 +32,7 @@ type DiscResult = Result<Vec<discv5::enr::Enr<CombinedKey>>, discv5::QueryError>
 
 #[derive(Debug, Clone)]
 pub struct DiscoveredPeers {
-    pub peers: HashMap<PeerId, Option<Instant>>,
+    pub peers: HashMap<PeerId, Option<Multiaddr>>,
 }
 
 impl Discovery {
@@ -40,7 +41,7 @@ impl Discovery {
         let listen_socket = "0.0.0.0:9000".parse::<SocketAddr>().unwrap();
 
         // Generate ENR
-        let enr_key: CombinedKey = key_from_libp2p(&local_key).unwrap();
+        let enr_key: CombinedKey = key_from_libp2p(local_key).unwrap();
 
         let local_enr = build_enr(&enr_key);
 
@@ -63,8 +64,10 @@ impl Discovery {
         let mut discv5 = Discv5::new(local_enr.clone(), enr_key, config).unwrap();
 
         // Add bootnode
-        let ef_bootnode_enr = Enr::from_str(BOOTNODE).unwrap();
-        discv5.add_enr(ef_bootnode_enr).expect("bootnode error");
+        for bootnode in BOOTNODES {
+            let ef_bootnode_enr = Enr::from_str(bootnode).unwrap();
+            discv5.add_enr(ef_bootnode_enr).expect("bootnode error");
+        }
 
         // Start the discv5 service
         discv5.start(listen_socket).await.unwrap();
@@ -72,17 +75,21 @@ impl Discovery {
         // Obtain an event stream
         let event_stream = EventStream::Awaiting(Box::pin(discv5.event_stream()));
 
-        return Self {
+        Self {
             discv5,
             _enr: local_enr,
             event_stream,
-            multiaddr_map: HashMap::new(),
             peers_future: FuturesUnordered::new(),
             started: false,
-        };
+            peers_to_discover: 0,
+        }
     }
 
-    fn find_peers(&mut self) {
+    pub fn set_peers_to_discover(&mut self, peers_to_discover: usize) {
+        self.peers_to_discover = peers_to_discover;
+    }
+
+    fn find_peers(&mut self, count: usize) {
         let fork_digest = self._enr.fork_id().unwrap().fork_digest;
 
         let predicate: Box<dyn Fn(&Enr) -> bool + Send> = Box::new(move |enr: &Enr| {
@@ -91,7 +98,7 @@ impl Discovery {
 
         let target = NodeId::random();
 
-        let peers_enr = self.discv5.find_node_predicate(target, predicate, 16);
+        let peers_enr = self.discv5.find_node_predicate(target, predicate, count);
 
         self.peers_future.push(Box::pin(peers_enr));
     }
@@ -101,22 +108,30 @@ impl Discovery {
             if res.is_ok() {
                 self.peers_future = FuturesUnordered::new();
 
-                let mut peers: HashMap<PeerId, Option<Instant>> = HashMap::new();
+                let mut peers: HashMap<PeerId, Option<Multiaddr>> = HashMap::new();
 
                 for peer_enr in res.unwrap() {
+                    match self.discv5.add_enr(peer_enr.clone()) {
+                        Ok(_) => {
+                            debug!("Added peer: {:?} to discv5", peer_enr.node_id());
+                        }
+                        Err(_) => {
+                            warn!("Failed to add peer: {:?} to discv5", peer_enr.node_id());
+                        }
+                    };
                     let peer_id = peer_enr.clone().as_peer_id();
 
+                    let mut multiaddr: Option<Multiaddr> = None;
                     if peer_enr.ip4().is_some() && peer_enr.tcp4().is_some() {
-                        let mut multiaddr: Multiaddr = peer_enr.ip4().unwrap().into();
-
-                        multiaddr.push(Protocol::Tcp(peer_enr.tcp4().unwrap()));
-
-                        self.multiaddr_map.insert(peer_id, multiaddr);
+                        let mut multiaddr_inner: Multiaddr = peer_enr.ip4().unwrap().into();
+                        multiaddr_inner.push(Protocol::Tcp(peer_enr.tcp4().unwrap()));
+                        multiaddr = Some(multiaddr_inner);
                     }
-
-                    peers.insert(peer_id, None);
+                    peers.insert(peer_id, multiaddr);
                 }
 
+                println!("Found {} peers", peers.len());
+                println!("Peers: {:#?}", &peers);
                 return Some(DiscoveredPeers { peers });
             }
         }
@@ -146,25 +161,18 @@ impl NetworkBehaviour for Discovery {
         libp2p::swarm::dummy::ConnectionHandler {}
     }
 
-    fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
-        let mut peer_address: Vec<Multiaddr> = Vec::new();
-
-        if let Some(address) = self.multiaddr_map.get(peer_id) {
-            peer_address.push(address.clone());
-        }
-
-        return peer_address;
-    }
-
     // Main execution loop to drive the behaviour
     fn poll(
         &mut self,
         cx: &mut Context,
         _: &mut impl PollParameters,
     ) -> Poll<NetworkBehaviourAction<Self::OutEvent, Self::ConnectionHandler>> {
-        if !self.started {
+        // println!("Discovery polled : {}", self.poll_count);
+        if self.peers_to_discover > 0 {
             self.started = true;
-            self.find_peers();
+            println!("Finding Peers");
+            self.find_peers(self.peers_to_discover);
+            self.peers_to_discover = 0;
 
             return Poll::Pending;
         }

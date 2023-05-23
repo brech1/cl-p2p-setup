@@ -67,7 +67,6 @@ pub trait SignedRoot: TreeHash {
             domain,
         }
         .tree_hash_root()
-        .into()
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::config::{DUPLICATE_CACHE_TIME, GOSSIP_MAX_SIZE_BELLATRIX};
 use crate::discovery::Discovery;
+use crate::peer_manager::PeerManager;
 use crate::rpc::protocol::InboundRequest;
 use crate::rpc::{ReqId, RequestId, RPC};
 use libp2p::futures::StreamExt;
@@ -13,6 +14,7 @@ use libp2p::{
     core, dns, gossipsub, identify, identity, mplex, noise, tcp, websocket, yamux, PeerId,
     Transport,
 };
+use log::{debug, info, warn};
 use sha2::{Digest, Sha256};
 use snap::raw::{decompress_len, Decoder, Encoder};
 use std::io::{Error, ErrorKind};
@@ -21,23 +23,31 @@ mod chain;
 mod config;
 mod discovery;
 mod enr;
+mod peer_manager;
 mod rpc;
 use crate::rpc::methods::{
     EnrAttestationBitfield, EnrSyncCommitteeBitfield, MetaData, RPCCodedResponse, RPCResponse,
 };
 
+const PEER_DATA_FILE: &str = "peer_data.json";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     // Create a random PeerId
     let local_key = identity::Keypair::generate_secp256k1();
     let local_peer_id = PeerId::from(local_key.public());
 
-    println!("Local peer id: {local_peer_id}");
+    info!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the Mplex protocol.
     let transport = build_transport(&local_key)?;
 
     let discovery = Discovery::new(&local_key).await;
+
+    let target_num_peers = 16;
+    let mut peer_manager = PeerManager::new(target_num_peers);
+    peer_manager.load_peer_data(PEER_DATA_FILE);
 
     fn prefix(prefix: [u8; 4], message: &GossipsubMessage) -> Vec<u8> {
         let topic_bytes = message.topic.as_str().as_bytes();
@@ -106,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         discovery: Discovery,
         rpc: RPC<RequestId<AppReqId>>,
         identify: identify::Behaviour,
+        peer_manager: PeerManager,
     }
 
     let behaviour = {
@@ -114,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             discovery,
             rpc,
             identify,
+            peer_manager,
         }
     };
 
@@ -123,36 +135,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connection_event_buffer_size(64)
         .connection_limits(
             ConnectionLimits::default()
-                .with_max_pending_incoming(Some(5))
-                .with_max_pending_outgoing(Some(16))
-                .with_max_established_per_peer(Some(1)),
+                .with_max_pending_incoming(Some(64))
+                .with_max_pending_outgoing(Some(32))
+                .with_max_established_per_peer(Some(10)),
         )
         .build();
 
     // Listen
     swarm.listen_on("/ip4/0.0.0.0/tcp/9000".parse()?)?;
 
+    let time_to_stop = std::time::Instant::now() + std::time::Duration::from_secs(60 * 3);
     // Run
-    loop {
+    while std::time::Instant::now() < time_to_stop {
         tokio::select! {
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
                     BehaviourEvent::Gossipsub(gs) =>
                     match gs {
-                        gossipsub::GossipsubEvent::Message { propagation_source: _, message_id: _, message } => println!("Gossipsub Message: {:#?}", message),
+                        gossipsub::GossipsubEvent::Message { propagation_source: _, message_id: _, message } => debug!("Gossipsub Message: {:#?}", message),
                         _ => ()
                     },
                     BehaviourEvent::Discovery(discovered) => {
-                        for (peer_id, _multiaddr) in discovered.peers {
-                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                        }
+                        debug!("Discovery Event: {:#?}", &discovered);
+                            swarm.behaviour_mut().peer_manager.add_peers(discovered.peers);
                     },
                     BehaviourEvent::Rpc(rpc_message) =>{
-                        println!("RPC message: {:#?}", rpc_message);
+                        debug!("RPC message: {:#?}", rpc_message);
                         match rpc_message.event {
                         Ok(received) => match received {
                         rpc::RPCReceived::Request(substream, inbound_req) => {
-                            println!("RPC Request: {:#?}", inbound_req);
+                            debug!("RPC Request: {:#?}", inbound_req);
                             match inbound_req {
                                 InboundRequest::Status(status)=>{
                                     swarm.behaviour_mut().rpc.send_response(rpc_message.peer_id, (rpc_message.conn_id,substream), RPCCodedResponse::Success(RPCResponse::Status(status)));
@@ -176,16 +188,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         },
                         rpc::RPCReceived::Response(_, _) => todo!(),
                         },
-                        Err(e) =>  println!("{}", e),
+                        Err(e) =>  warn!("Error in RPC quest handling: {}", e),
                     }},
-                    BehaviourEvent::Identify(ev) => println!("identify: {:#?}", ev),
+                    BehaviourEvent::Identify(ev) => {
+                        debug!("identify: {:#?}", ev);
+                        match ev {
+                            libp2p::identify::Event::Received { peer_id, info, .. } => {
+                                swarm.behaviour_mut().peer_manager.add_peer_identity(peer_id, info);
+                            }
+                            _ => {}
+                        }
+                    },
+                    BehaviourEvent::PeerManager(ev) => {
+                        debug!("PeerManager event: {:#?}", ev);
+                        match ev {
+                            peer_manager::PeerManagerEvent::DiscoverPeers(num_peers) => {
+                                swarm.behaviour_mut().discovery.set_peers_to_discover(num_peers as usize);
+                            },
+                            peer_manager::PeerManagerEvent::DialPeers(peer_ids) => {
+                                for peer_id in peer_ids {
+                                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                }
+                            },
+                        }
+                    },
                 },
-                SwarmEvent::ConnectionClosed { peer_id: _, endpoint: _, num_established: _, cause } => println!("ConnectionClosed: {cause:?}"),
-                SwarmEvent::OutgoingConnectionError { peer_id: _, error } => println!("OutgoingConnectionError: {error:?}"),
-                _ => println!("Swarm: {event:?}"),
+                SwarmEvent::ConnectionClosed { peer_id, endpoint, num_established, cause } => {
+                    debug!("ConnectionClosed: Cause {cause:?} - PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
+                },
+                SwarmEvent::ConnectionEstablished { peer_id, endpoint, num_established, .. } => {
+                    debug!("ConnectionEstablished: PeerId: {peer_id:?} - NumEstablished: {num_established:?} - Endpoint: {endpoint:?}");
+                },
+                _ => debug!("Swarm: {event:?}"),
+            },
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                info!("Connected peers: {}", swarm.behaviour_mut().gossipsub.all_peers().collect::<Vec<_>>().len());
             }
         }
     }
+
+    swarm.behaviour().peer_manager.log_identities();
+    swarm.behaviour().peer_manager.log_metrics();
+    swarm
+        .behaviour_mut()
+        .peer_manager
+        .save_peer_data(PEER_DATA_FILE);
+    Ok(())
 }
 
 pub fn build_transport(
@@ -215,7 +263,7 @@ pub fn build_transport(
             yamux_config,
             mplex_config,
         ))
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(100))
         .boxed())
 }
 
@@ -262,6 +310,7 @@ impl DataTransform for SnappyTransform {
         _topic: &TopicHash,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, std::io::Error> {
+        println!("Outbound transform: {}", _topic);
         if data.len() > self.max_size_per_message {
             return Err(Error::new(
                 ErrorKind::InvalidData,
